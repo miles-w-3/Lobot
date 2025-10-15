@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -16,6 +17,7 @@ type Client struct {
 	Config      *rest.Config
 	ClusterName string
 	Context     string
+	Logger      *slog.Logger
 }
 
 // NewClient creates a new Kubernetes client
@@ -23,14 +25,22 @@ type Client struct {
 // 1. KUBECONFIG environment variable
 // 2. ~/.kube/config
 // 3. In-cluster config (when running inside a pod)
-func NewClient() (*Client, error) {
+func NewClient(logger *slog.Logger) (*Client, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	var config *rest.Config
 	var err error
 	var context, clusterName string
 
+	logger.Info("Loading Kubernetes configuration")
+
 	// Try loading from kubeconfig
 	config, context, clusterName, err = loadKubeConfigWithContext()
+	logger.Debug("Got kubeconfig", "context", context, "cluster", clusterName)
 	if err != nil {
+		logger.Warn("Failed to load kubeconfig, falling back to in-cluster config", "error", err)
 		// Fall back to in-cluster config
 		config, err = rest.InClusterConfig()
 		if err != nil {
@@ -40,17 +50,22 @@ func NewClient() (*Client, error) {
 		clusterName = "in-cluster"
 	}
 
+	logger.Info("Loaded Kubernetes configuration", "context", context, "cluster", clusterName)
+
 	// Create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes clientset: %w", err)
 	}
 
+	logger.Info("Created Kubernetes clientset successfully")
+
 	return &Client{
 		Clientset:   clientset,
 		Config:      config,
 		ClusterName: clusterName,
 		Context:     context,
+		Logger:      logger,
 	}, nil
 }
 

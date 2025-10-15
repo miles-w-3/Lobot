@@ -66,21 +66,29 @@ func tick() tea.Cmd {
 	return tea.Tick(60*time.Millisecond, func(time.Time) tea.Msg { return TickMsg{} })
 }
 
+func longTick() tea.Cmd {
+	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return TickMsg{} })
+}
+
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg.(type) {
 	case TickMsg:
 		switch m.phase {
 		case PhaseDrawing:
 			m.step++
-			if m.step >= m.width+m.height {
+			// Draw bottom to top (step goes from 0 to height)
+			if m.step >= m.height {
 				m.phase = PhaseShowingX
 			}
 			return m, tick()
 		case PhaseShowingX:
+			// Reset step for clearing phase
+			m.step = m.height
 			m.phase = PhaseClearing
-			return m, tick()
+			return m, longTick() // Pause for effect before clearing
 		case PhaseClearing:
 			m.step--
+			// Clear top to bottom (step goes from height down to 0)
 			if m.step <= 0 {
 				// Animation complete - check if we're ready to exit
 				if m.readyToExit {
@@ -189,16 +197,19 @@ func (m *Model) SetSize(width, height int) {
 	m.termHeight = height
 }
 
-// Show G pixels along a diagonal
+// Show G pixels from bottom to top
 func shouldShowG(m Model, x, y int) bool {
-	line := x + (m.height - 1 - y)
 	switch m.phase {
 	case PhaseDrawing:
-		return line <= m.step
+		// Draw from bottom to top: reveal rows from bottom (higher y) to top (lower y)
+		// step goes from 0 to height-1
+		return y >= (m.height - m.step)
 	case PhaseShowingX:
 		return true
 	case PhaseClearing:
-		return line <= m.step
+		// Clear from top to bottom: hide rows from top (lower y) to bottom (higher y)
+		// step goes from height-1 to 0
+		return y >= (m.height - m.step)
 	default:
 		return false
 	}
@@ -210,9 +221,8 @@ func shouldShowX(m Model, x, y int) bool {
 	case PhaseShowingX:
 		return true
 	case PhaseClearing:
-		// Hide Xs progressively along the same diagonal pattern
-		line := x + (m.height - 1 - y)
-		return line <= m.step
+		// Hide Xs from top to bottom, same as Gs
+		return y >= (m.height - m.step)
 	default:
 		return false
 	}

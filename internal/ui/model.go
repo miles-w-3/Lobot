@@ -1,11 +1,22 @@
 package ui
 
 import (
+	"bytes"
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
 
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/miles-w-3/lobot/internal/filters"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
@@ -41,19 +52,30 @@ type Model struct {
 	height        int
 
 	// Filtering
-	namespaceFilter *filters.NamespaceFilter
+	namespaceFilter *filters.NamespaceFilter    // Namespace filter (set via ctrl+n selector)
+	nameFilter      *filters.ResourceNameFilter // Resource name filter (set via / search)
 	filterInput     textinput.Model
 
 	// Splash screen
 	splash splash.Model
+
+	// Table component
+	table table.Model
 
 	// Manifest viewer
 	manifestViewport viewport.Model
 	manifestContent  string
 
 	// Status
-	ready bool
-	err   error
+	ready         bool
+	err           error
+	statusMessage string
+
+	// Modal
+	alertModal *AlertModal
+
+	// Selector (for namespace/context selection)
+	selector *SelectorModel
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -62,11 +84,45 @@ type ResourceUpdateMsg struct{}
 // ReadyMsg is sent when the application is ready
 type ReadyMsg struct{}
 
+// EditorFinishedMsg is sent when external editor finishes
+type EditorFinishedMsg struct {
+	Err         error
+	Cancelled   bool
+	BackupPath  string
+}
+
 // NewModel creates a new UI model
 func NewModel(client *k8s.Client, informer *k8s.InformerManager) Model {
 	filterInput := textinput.New()
-	filterInput.Placeholder = "Filter by namespace..."
+	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
+
+	// Initialize table with empty columns (will be set later)
+	columns := []table.Column{
+		{Title: "NAME", Width: 40},
+		{Title: "NAMESPACE", Width: 20},
+		{Title: "STATUS", Width: 15},
+		{Title: "AGE", Width: 10},
+	}
+
+	t := table.New(
+		table.WithColumns(columns),
+		table.WithFocused(true),
+		table.WithHeight(10),
+	)
+
+	// Set table styles
+	s := table.DefaultStyles()
+	s.Header = s.Header.
+		BorderStyle(lipgloss.NormalBorder()).
+		BorderForeground(lipgloss.Color("240")).
+		BorderBottom(true).
+		Bold(false)
+	s.Selected = s.Selected.
+		Foreground(lipgloss.Color("229")).
+		Background(lipgloss.Color("57")).
+		Bold(false)
+	t.SetStyles(s)
 
 	return Model{
 		client:          client,
@@ -77,9 +133,12 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager) Model {
 		scrollOffset:    0,
 		viewMode:        ViewModeSplash,
 		namespaceFilter: filters.NewNamespaceFilter(),
+		nameFilter:      filters.NewResourceNameFilter(),
 		filterInput:     filterInput,
 		splash:          splash.NewModel(),
+		table:           t,
 		ready:           false,
+		alertModal:      NewAlertModal(),
 	}
 }
 
@@ -98,16 +157,60 @@ func (m *Model) UpdateResources() {
 	currentResourceType := m.resourceTypes[m.currentType]
 	m.resources = m.informer.GetResources(currentResourceType.GVR)
 
-	// Apply namespace filter
+	// Apply namespace filter first
 	m.filteredResources = m.namespaceFilter.FilterResources(m.resources)
+
+	// Then apply name filter
+	m.filteredResources = m.nameFilter.FilterResources(m.filteredResources)
+
+	// Update table columns based on resource type
+	var columns []table.Column
+	if currentResourceType.Namespaced {
+		columns = []table.Column{
+			{Title: "NAME", Width: 40},
+			{Title: "NAMESPACE", Width: 20},
+			{Title: "STATUS", Width: 15},
+			{Title: "AGE", Width: 10},
+		}
+	} else {
+		columns = []table.Column{
+			{Title: "NAME", Width: 60},
+			{Title: "STATUS", Width: 15},
+			{Title: "AGE", Width: 10},
+		}
+	}
+	m.table.SetColumns(columns)
+
+	// Update table rows
+	rows := make([]table.Row, 0, len(m.filteredResources))
+	for _, resource := range m.filteredResources {
+		age := formatAge(resource.Age)
+		if currentResourceType.Namespaced {
+			rows = append(rows, table.Row{
+				truncate(resource.Name, 40),
+				truncate(resource.Namespace, 20),
+				resource.Status,
+				age,
+			})
+		} else {
+			rows = append(rows, table.Row{
+				truncate(resource.Name, 60),
+				resource.Status,
+				age,
+			})
+		}
+	}
+	m.table.SetRows(rows)
 
 	// Adjust selected index if needed
 	if m.selectedIndex >= len(m.filteredResources) {
 		m.selectedIndex = max(0, len(m.filteredResources)-1)
 	}
 
-	// Adjust scroll offset
-	m.adjustScrollOffset()
+	// Set cursor on table to match selected index
+	if m.selectedIndex >= 0 && m.selectedIndex < len(m.filteredResources) {
+		m.table.SetCursor(m.selectedIndex)
+	}
 }
 
 // adjustScrollOffset ensures the selected item is visible
@@ -175,6 +278,67 @@ func (m *Model) ExitManifestMode() {
 	m.viewMode = ViewModeNormal
 }
 
+// EditSelectedResource opens the selected resource in an external editor
+// This properly suspends the BubbleTea program while the editor runs
+func (m *Model) EditSelectedResource() tea.Cmd {
+	resource := m.GetSelectedResource()
+	if resource == nil {
+		m.statusMessage = "No resource selected"
+		return nil
+	}
+
+	// Prepare the edit file BEFORE suspending the TUI
+	editResult, err := m.client.PrepareEditFile(resource)
+	if err != nil {
+		return func() tea.Msg {
+			return EditorFinishedMsg{Err: fmt.Errorf("failed to prepare edit: %w", err)}
+		}
+	}
+
+	// Get editor from environment or default to vim
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vim"
+	}
+
+	// Create a copy of the resource for the callback
+	resourceCopy := *resource
+	client := m.client
+
+	// Use tea.ExecProcess to properly suspend the TUI and run the editor
+	// This ensures no input conflicts between vim and the TUI
+	return tea.ExecProcess(exec.Command(editor, editResult.TmpFilePath), func(err error) tea.Msg {
+		// Cleanup: remove temporary file when done
+		defer os.Remove(editResult.TmpFilePath)
+
+		// Check if the editor exited with an error
+		if err != nil {
+			// Some editors use exit code 1 to indicate user cancellation
+			// But we can't reliably detect this, so we treat it as an error
+			return EditorFinishedMsg{
+				Err: fmt.Errorf("editor exited with error: %w", err),
+			}
+		}
+
+		// Process the edited file (validates and applies changes)
+		processErr := client.ProcessEditedFile(context.Background(), &resourceCopy, editResult)
+
+		// Check if the user just cancelled (no changes made)
+		if processErr == nil {
+			// Could be either successful update or cancellation (no changes)
+			// ProcessEditedFile returns nil for both cases
+			// The logging in ProcessEditedFile will distinguish these
+			return EditorFinishedMsg{Err: nil}
+		}
+
+		// An error occurred during processing
+		// Check if a backup file was created (will be in /tmp)
+		return EditorFinishedMsg{
+			Err: processErr,
+		}
+	})
+}
+
 // SetError sets an error on the model
 func (m *Model) SetError(err error) {
 	m.err = err
@@ -209,39 +373,39 @@ func (m *Model) PrevResourceType() {
 
 // MoveUp moves the selection up
 func (m *Model) MoveUp() {
-	if m.selectedIndex > 0 {
-		m.selectedIndex--
-		m.adjustScrollOffset()
-	}
+	m.table.MoveUp(1)
+	m.selectedIndex = m.table.Cursor()
 }
 
 // MoveDown moves the selection down
 func (m *Model) MoveDown() {
-	if m.selectedIndex < len(m.filteredResources)-1 {
-		m.selectedIndex++
-		m.adjustScrollOffset()
-	}
+	m.table.MoveDown(1)
+	m.selectedIndex = m.table.Cursor()
 }
 
 // PageUp moves the selection up by one page
 func (m *Model) PageUp() {
-	visibleLines := m.height - 5
-	m.selectedIndex = max(0, m.selectedIndex-visibleLines)
-	m.adjustScrollOffset()
+	// Move up by visible height
+	for i := 0; i < 10 && m.table.Cursor() > 0; i++ {
+		m.table.MoveUp(1)
+	}
+	m.selectedIndex = m.table.Cursor()
 }
 
 // PageDown moves the selection down by one page
 func (m *Model) PageDown() {
-	visibleLines := m.height - 5
-	m.selectedIndex = min(len(m.filteredResources)-1, m.selectedIndex+visibleLines)
-	m.adjustScrollOffset()
+	// Move down by visible height
+	for i := 0; i < 10 && m.table.Cursor() < len(m.filteredResources)-1; i++ {
+		m.table.MoveDown(1)
+	}
+	m.selectedIndex = m.table.Cursor()
 }
 
 // EnterFilterMode enters filter mode
 func (m *Model) EnterFilterMode() {
 	m.viewMode = ViewModeFilter
 	m.filterInput.Focus()
-	m.filterInput.SetValue(m.namespaceFilter.GetPattern())
+	m.filterInput.SetValue(m.nameFilter.GetPattern())
 }
 
 // ExitFilterMode exits filter mode
@@ -250,9 +414,9 @@ func (m *Model) ExitFilterMode() {
 	m.filterInput.Blur()
 }
 
-// UpdateFilter updates the namespace filter
+// UpdateFilter updates the resource name filter
 func (m *Model) UpdateFilter(pattern string) {
-	err := m.namespaceFilter.SetPattern(pattern)
+	err := m.nameFilter.SetPattern(pattern)
 	if err == nil {
 		m.UpdateResources()
 	}
@@ -273,10 +437,78 @@ func min(a, b int) int {
 	return b
 }
 
+func formatAge(duration time.Duration) string {
+	if duration < time.Minute {
+		return fmt.Sprintf("%ds", int(duration.Seconds()))
+	} else if duration < time.Hour {
+		return fmt.Sprintf("%dm", int(duration.Minutes()))
+	} else if duration < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(duration.Hours()))
+	} else {
+		return fmt.Sprintf("%dd", int(duration.Hours()/24))
+	}
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
 func formatManifest(obj interface{}) string {
 	yamlBytes, err := yaml.Marshal(obj)
 	if err != nil {
 		return fmt.Sprintf("Error formatting manifest: %v", err)
 	}
-	return string(yamlBytes)
+
+	yamlContent := string(yamlBytes)
+
+	// Apply syntax highlighting with Chroma
+	var highlightedBuf bytes.Buffer
+
+	lexer := lexers.Get("yaml")
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+
+	// Use terminal256 formatter for 256-color terminals
+	formatter := formatters.Get("terminal256")
+	if formatter == nil {
+		formatter = formatters.Fallback
+	}
+
+	// Use monokai style (good contrast for dark terminals)
+	style := styles.Get("monokai")
+	if style == nil {
+		style = styles.Fallback
+	}
+
+	iterator, err := lexer.Tokenise(nil, yamlContent)
+	if err != nil {
+		// Fall back to non-highlighted if tokenization fails
+		yamlContent = string(yamlBytes)
+	} else {
+		err = formatter.Format(&highlightedBuf, style, iterator)
+		if err == nil {
+			yamlContent = highlightedBuf.String()
+		}
+	}
+
+	// Add line numbers
+	lines := strings.Split(yamlContent, "\n")
+	var numbered strings.Builder
+	maxLineNum := len(lines)
+	lineNumWidth := len(fmt.Sprintf("%d", maxLineNum))
+
+	// Style for line numbers (muted gray)
+	lineNumStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+
+	for i, line := range lines {
+		lineNum := i + 1
+		styledLineNum := lineNumStyle.Render(fmt.Sprintf("%*d", lineNumWidth, lineNum))
+		numbered.WriteString(fmt.Sprintf("%s │ %s\n", styledLineNum, line))
+	}
+
+	return numbered.String()
 }

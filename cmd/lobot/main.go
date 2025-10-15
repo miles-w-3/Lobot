@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,13 +14,34 @@ import (
 )
 
 func main() {
+	// Initialize slog to write to out.log (overwrites on each run)
+	logFile, err := os.Create("out.log")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer logFile.Close()
+
+	logger := slog.New(slog.NewTextHandler(logFile, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+	slog.SetDefault(logger)
+
+	slog.Info("Lobot starting")
+
 	if err := run(); err != nil {
+		slog.Error("Application error", "error", err)
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	slog.Info("Lobot exiting")
 }
 
 func run() error {
+	// Get the configured logger (set in main())
+	logger := slog.Default()
+
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -33,7 +55,7 @@ func run() error {
 	}()
 
 	// Initialize Kubernetes client
-	client, err := k8s.NewClient()
+	client, err := k8s.NewClient(logger)
 	if err != nil {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}

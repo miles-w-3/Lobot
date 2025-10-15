@@ -2,37 +2,46 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/miles-w-3/lobot/internal/k8s"
 )
 
 // View renders the UI
 func (m Model) View() string {
+	var baseView string
+
 	// Show splash screen if in splash mode
 	if m.viewMode == ViewModeSplash {
-		return m.splash.View()
+		baseView = m.splash.View()
+	} else if m.err != nil {
+		baseView = statusErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+	} else if m.viewMode == ViewModeManifest {
+		// Show manifest viewer if in manifest mode
+		baseView = m.renderManifestView()
+	} else {
+		// Normal view - full screen with proper layout
+		baseView = m.renderNormalView()
 	}
 
-	if m.err != nil {
-		return statusErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
+	// If selector is visible, render it as an overlay
+	if m.selector != nil && m.selector.IsVisible() {
+		return m.renderSelectorOverlay(baseView)
 	}
 
-	// Show manifest viewer if in manifest mode
-	if m.viewMode == ViewModeManifest {
-		return m.renderManifestView()
+	// If modal is visible, render it as an overlay on top of the base view
+	if m.alertModal.IsVisible() {
+		return m.renderModalOverlay(baseView)
 	}
 
-	// Normal view - full screen with proper layout
-	return m.renderNormalView()
+	return baseView
 }
 
 // renderNormalView renders the main resource list view
 func (m Model) renderNormalView() string {
 	// Calculate dimensions
-	contentHeight := m.height - 5 // Leave room for status line, header, and help
+	contentHeight := m.height - 6 // Leave room for status line, header, and help
 
 	// Status line (cluster and resource type)
 	statusLine := m.renderStatusLine()
@@ -57,8 +66,8 @@ func (m Model) renderNormalView() string {
 	// Combine all sections
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		statusLine,
 		header,
+		statusLine,
 		borderedContent,
 		help,
 	)
@@ -128,6 +137,9 @@ func (m Model) renderStatusLine() string {
 		}
 	}
 
+	// TODO: Get log object better
+	slog.Default().Debug("rendering with clusterName", "name", clusterName)
+
 	currentType := m.CurrentResourceType()
 
 	// Cluster on the left, resource type on the right
@@ -152,20 +164,18 @@ func (m Model) renderStatusLine() string {
 
 	// Add padding to make it more visible
 	return lipgloss.NewStyle().
-		Padding(0, 1).
 		Render(line)
 }
 
-// renderHeader renders the header with current resource type
+// renderHeader renders the header
 func (m Model) renderHeader() string {
-	currentType := m.CurrentResourceType()
-	title := titleStyle.Render(fmt.Sprintf("Lobot - %s", currentType.DisplayName))
+	title := titleStyle.Render("Lobot")
 	return headerStyle.Render(title)
 }
 
 // renderFilterBar renders the filter input bar
 func (m Model) renderFilterBar() string {
-	label := "Namespace filter: "
+	label := "Resource name filter: "
 	input := m.filterInput.View()
 	content := label + input
 	return filterBarStyle.Render(content)
@@ -177,83 +187,7 @@ func (m Model) renderResourceTable() string {
 		return helpStyle.Render("No resources found")
 	}
 
-	// Calculate visible area
-	visibleLines := m.height - 10 // Account for all UI elements and borders
-	if visibleLines < 1 {
-		visibleLines = 10 // Default minimum
-	}
-
-	var rows []string
-
-	// Table header
-	currentType := m.CurrentResourceType()
-	if currentType.Namespaced {
-		header := tableHeaderStyle.Render(
-			fmt.Sprintf("%-40s %-20s %-15s %-10s",
-				"NAME", "NAMESPACE", "STATUS", "AGE"),
-		)
-		rows = append(rows, header)
-	} else {
-		header := tableHeaderStyle.Render(
-			fmt.Sprintf("%-40s %-15s %-10s",
-				"NAME", "STATUS", "AGE"),
-		)
-		rows = append(rows, header)
-	}
-
-	// Calculate visible range
-	startIdx := m.scrollOffset
-	endIdx := min(startIdx+visibleLines, len(m.filteredResources))
-
-	// Table rows
-	for i := startIdx; i < endIdx; i++ {
-		resource := m.filteredResources[i]
-		row := m.renderResourceRow(&resource, i == m.selectedIndex, currentType.Namespaced)
-		rows = append(rows, row)
-	}
-
-	// Scroll indicator
-	if len(m.filteredResources) > visibleLines {
-		scrollInfo := fmt.Sprintf("  [%d-%d of %d]", startIdx+1, endIdx, len(m.filteredResources))
-		rows = append(rows, helpStyle.Render(scrollInfo))
-	}
-
-	return strings.Join(rows, "\n")
-}
-
-// renderResourceRow renders a single resource row
-func (m Model) renderResourceRow(resource *k8s.Resource, selected bool, namespaced bool) string {
-	if resource == nil {
-		return ""
-	}
-
-	name := resource.Name
-	namespace := resource.Namespace
-	status := resource.Status
-	age := formatAge(resource.Age)
-
-	statusStyled := GetStatusStyle(status).Render(status)
-
-	var content string
-	if namespaced {
-		content = fmt.Sprintf("%-40s %-20s %-15s %-10s",
-			truncate(name, 40),
-			truncate(namespace, 20),
-			statusStyled,
-			age,
-		)
-	} else {
-		content = fmt.Sprintf("%-40s %-15s %-10s",
-			truncate(name, 40),
-			statusStyled,
-			age,
-		)
-	}
-
-	if selected {
-		return selectedRowStyle.Render(content)
-	}
-	return tableRowStyle.Render(content)
+	return m.table.View()
 }
 
 // renderStatusBar renders the status bar
@@ -267,9 +201,21 @@ func (m Model) renderStatusBar() string {
 	}
 	parts = append(parts, statusInfoStyle.Render(countInfo))
 
-	// Filter status
+	// Active filters
+	var activeFilters []string
+
+	// Namespace filter
 	if pattern := m.namespaceFilter.GetPattern(); pattern != "" {
-		filterInfo := fmt.Sprintf("Filter: %s", pattern)
+		activeFilters = append(activeFilters, fmt.Sprintf("ns:%s", pattern))
+	}
+
+	// Name filter
+	if pattern := m.nameFilter.GetPattern(); pattern != "" {
+		activeFilters = append(activeFilters, fmt.Sprintf("name:%s", pattern))
+	}
+
+	if len(activeFilters) > 0 {
+		filterInfo := fmt.Sprintf("Filters: %s", strings.Join(activeFilters, ", "))
 		parts = append(parts, statusInfoStyle.Render(filterInfo))
 	}
 
@@ -282,17 +228,27 @@ func (m Model) renderHelp() string {
 
 	switch m.viewMode {
 	case ViewModeFilter:
-		helpText = fmt.Sprintf("%s enter to apply | %s esc to cancel",
-			keyStyle.Render("↵"),
+		helpText = fmt.Sprintf("%s apply name filter | %s cancel",
+			keyStyle.Render("enter"),
+			keyStyle.Render("esc"),
+		)
+	case ViewModeManifest:
+		helpText = fmt.Sprintf(
+			"%s/%s scroll | %s edit | %s back",
+			keyStyle.Render("↑/↓"),
+			keyStyle.Render("pgup/pgdown"),
+			keyStyle.Render("e"),
 			keyStyle.Render("esc"),
 		)
 	default:
 		helpText = fmt.Sprintf(
-			"%s/%s nav | %s view | %s filter | %s/%s resource | %s quit",
+			"%s/%s nav | %s view | %s edit | %s search | %s namespace | %s/%s resource | %s quit",
 			keyStyle.Render("↑/↓"),
 			keyStyle.Render("j/k"),
 			keyStyle.Render("enter"),
+			keyStyle.Render("shift+e"),
 			keyStyle.Render("/"),
+			keyStyle.Render("ctrl+n"),
 			keyStyle.Render("tab"),
 			keyStyle.Render("shift+tab"),
 			keyStyle.Render("q"),
@@ -302,23 +258,125 @@ func (m Model) renderHelp() string {
 	return helpStyle.Render(helpText)
 }
 
-// Helper functions
+// renderModalOverlay renders the modal as an overlay on top of the base view
+func (m Model) renderModalOverlay(baseView string) string {
+	// Use lipgloss.Place to properly center the modal
+	// This handles ANSI codes correctly and prevents streaking
+	modalView := m.alertModal.View()
 
-func formatAge(duration time.Duration) string {
-	if duration < time.Minute {
-		return fmt.Sprintf("%ds", int(duration.Seconds()))
-	} else if duration < time.Hour {
-		return fmt.Sprintf("%dm", int(duration.Minutes()))
-	} else if duration < 24*time.Hour {
-		return fmt.Sprintf("%dh", int(duration.Hours()))
-	} else {
-		return fmt.Sprintf("%dd", int(duration.Hours()/24))
+	// Place the modal in the center of the screen, using absolute positioning
+	// This overlays on top of the base view
+	centeredModal := lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Center,
+		modalView,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
+	)
+
+	// Now we need to composite the centered modal on top of the base view
+	// Split both into lines and overlay
+	baseLines := strings.Split(baseView, "\n")
+	modalLines := strings.Split(centeredModal, "\n")
+
+	// Ensure we have the same number of lines
+	maxLines := max(len(baseLines), len(modalLines))
+	outputLines := make([]string, maxLines)
+
+	for i := 0; i < maxLines; i++ {
+		var baseLine, modalLine string
+
+		if i < len(baseLines) {
+			baseLine = baseLines[i]
+		}
+		if i < len(modalLines) {
+			modalLine = modalLines[i]
+		}
+
+		// If modal line is effectively empty (only whitespace/transparent), use base
+		// Otherwise use modal line (which will overlay the base)
+		trimmed := strings.TrimSpace(stripANSI(modalLine))
+		if trimmed == "" {
+			outputLines[i] = baseLine
+		} else {
+			outputLines[i] = modalLine
+		}
 	}
+
+	return strings.Join(outputLines, "\n")
 }
 
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
+// stripANSI removes ANSI escape codes for checking if line has content
+func stripANSI(s string) string {
+	// Simple ANSI stripper - matches ESC [ ... m
+	result := ""
+	inEscape := false
+	escapeDepth := 0
+
+	for _, r := range s {
+		if r == '\x1b' {
+			inEscape = true
+			escapeDepth = 0
+			continue
+		}
+		if inEscape {
+			escapeDepth++
+			if r == 'm' || escapeDepth > 20 {
+				inEscape = false
+			}
+			continue
+		}
+		result += string(r)
 	}
-	return s[:maxLen-3] + "..."
+	return result
+}
+
+// renderSelectorOverlay renders the selector as an overlay on top of the base view
+func (m Model) renderSelectorOverlay(baseView string) string {
+	if m.selector == nil {
+		return baseView
+	}
+
+	selectorView := m.selector.View()
+
+	// Place the selector at the bottom center of the screen
+	centeredSelector := lipgloss.Place(
+		m.width,
+		m.height,
+		lipgloss.Center,
+		lipgloss.Bottom,
+		selectorView,
+		lipgloss.WithWhitespaceChars(" "),
+		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
+	)
+
+	// Composite with base view
+	baseLines := strings.Split(baseView, "\n")
+	selectorLines := strings.Split(centeredSelector, "\n")
+
+	maxLines := max(len(baseLines), len(selectorLines))
+	outputLines := make([]string, maxLines)
+
+	for i := 0; i < maxLines; i++ {
+		var baseLine, selectorLine string
+
+		if i < len(baseLines) {
+			baseLine = baseLines[i]
+		}
+		if i < len(selectorLines) {
+			selectorLine = selectorLines[i]
+		}
+
+		// If selector line has content, use it; otherwise use base
+		trimmed := strings.TrimSpace(stripANSI(selectorLine))
+		if trimmed == "" {
+			outputLines[i] = baseLine
+		} else {
+			outputLines[i] = selectorLine
+		}
+	}
+
+	return strings.Join(outputLines, "\n")
 }

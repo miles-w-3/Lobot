@@ -19,9 +19,7 @@ var (
 	// Header styles
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(colorPrimary).
-			Padding(0, 1).
-			MarginBottom(1)
+			Foreground(colorPrimary)
 
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).

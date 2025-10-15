@@ -24,6 +24,7 @@ type Resource struct {
 	Age        time.Duration
 	Labels     map[string]string
 	Raw        *unstructured.Unstructured
+	GVR        schema.GroupVersionResource // The GVR this resource came from
 }
 
 // ResourceType represents a Kubernetes resource type
@@ -186,7 +187,7 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 
 	for _, obj := range store.List() {
 		if unstructuredObj, ok := obj.(*unstructured.Unstructured); ok {
-			resources = append(resources, convertUnstructuredToResource(unstructuredObj))
+			resources = append(resources, convertUnstructuredToResource(unstructuredObj, gvr))
 		}
 	}
 
@@ -217,7 +218,7 @@ func (im *InformerManager) Stop() {
 }
 
 // convertUnstructuredToResource converts an unstructured object to our Resource type
-func convertUnstructuredToResource(obj *unstructured.Unstructured) Resource {
+func convertUnstructuredToResource(obj *unstructured.Unstructured, gvr schema.GroupVersionResource) Resource {
 	// Extract status if available
 	status := "Unknown"
 	if statusMap, found, _ := unstructured.NestedMap(obj.Object, "status"); found {
@@ -243,6 +244,7 @@ func convertUnstructuredToResource(obj *unstructured.Unstructured) Resource {
 		Age:        time.Since(obj.GetCreationTimestamp().Time),
 		Labels:     obj.GetLabels(),
 		Raw:        obj,
+		GVR:        gvr, // Include the GVR this resource came from
 	}
 }
 

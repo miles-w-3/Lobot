@@ -1,0 +1,17 @@
+# Debug logs
+out.log
+
+# Binary
+lobot
+
+# Go build artifacts
+*.o
+*.a
+*.so
+
+# Go test files
+*.test
+*.out
+
+# Dependency directories
+vendor/
