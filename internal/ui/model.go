@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/miles-w-3/lobot/internal/filters"
+	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
 	"sigs.k8s.io/yaml"
@@ -32,6 +33,7 @@ const (
 	ViewModeFilter
 	ViewModeManifest
 	ViewModeResourceTypeSelection
+	ViewModeVisualize
 )
 
 // Model represents the UI state
@@ -39,6 +41,7 @@ type Model struct {
 	// Kubernetes data
 	client            *k8s.Client
 	informer          *k8s.InformerManager
+	graphBuilder      *graph.Builder
 	resourceTypes     []k8s.ResourceType
 	currentType       int
 	resources         []k8s.Resource
@@ -76,6 +79,9 @@ type Model struct {
 
 	// Selector (for namespace/context selection)
 	selector *SelectorModel
+
+	// Visualizer
+	visualizer *VisualizerModel
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -91,8 +97,13 @@ type EditorFinishedMsg struct {
 	BackupPath  string
 }
 
+// BuildGraphMsg is sent to trigger graph building
+type BuildGraphMsg struct {
+	Resource *k8s.Resource
+}
+
 // NewModel creates a new UI model
-func NewModel(client *k8s.Client, informer *k8s.InformerManager) Model {
+func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *graph.Builder) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
@@ -127,6 +138,7 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager) Model {
 	return Model{
 		client:          client,
 		informer:        informer,
+		graphBuilder:    graphBuilder,
 		resourceTypes:   k8s.DefaultResourceTypes(),
 		currentType:     0,
 		selectedIndex:   0,
@@ -165,7 +177,15 @@ func (m *Model) UpdateResources() {
 
 	// Update table columns based on resource type
 	var columns []table.Column
-	if currentResourceType.Namespaced {
+	if currentResourceType.DisplayName == "Helm Releases" {
+		// Special columns for Helm releases: NAME, NAMESPACE, STATUS, VERSION
+		columns = []table.Column{
+			{Title: "NAME", Width: 30},
+			{Title: "NAMESPACE", Width: 20},
+			{Title: "STATUS", Width: 15},
+			{Title: "VERSION", Width: 30},
+		}
+	} else if currentResourceType.Namespaced {
 		columns = []table.Column{
 			{Title: "NAME", Width: 40},
 			{Title: "NAMESPACE", Width: 20},
@@ -185,7 +205,15 @@ func (m *Model) UpdateResources() {
 	rows := make([]table.Row, 0, len(m.filteredResources))
 	for _, resource := range m.filteredResources {
 		age := formatAge(resource.Age)
-		if currentResourceType.Namespaced {
+		if currentResourceType.DisplayName == "Helm Releases" {
+			// Special row format for Helm releases
+			rows = append(rows, table.Row{
+				truncate(resource.Name, 30),
+				truncate(resource.Namespace, 20),
+				resource.Status,
+				truncate(resource.HelmChart, 30),
+			})
+		} else if currentResourceType.Namespaced {
 			rows = append(rows, table.Row{
 				truncate(resource.Name, 40),
 				truncate(resource.Namespace, 20),
@@ -276,6 +304,24 @@ func (m *Model) EnterManifestMode() {
 // ExitManifestMode exits manifest viewing mode
 func (m *Model) ExitManifestMode() {
 	m.viewMode = ViewModeNormal
+}
+
+// EnterVisualizeMode enters visualization mode for the selected resource
+func (m *Model) EnterVisualizeMode() {
+	resource := m.GetSelectedResource()
+	if resource == nil {
+		m.statusMessage = "No resource selected"
+		return
+	}
+
+	m.statusMessage = "Building resource graph..."
+	// The graph building will be done in the update handler
+}
+
+// ExitVisualizeMode exits visualization mode
+func (m *Model) ExitVisualizeMode() {
+	m.viewMode = ViewModeNormal
+	m.visualizer = nil
 }
 
 // EditSelectedResource opens the selected resource in an external editor

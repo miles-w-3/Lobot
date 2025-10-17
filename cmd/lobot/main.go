@@ -9,6 +9,8 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/miles-w-3/lobot/internal/graph"
+	"github.com/miles-w-3/lobot/internal/helm"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/ui"
 )
@@ -67,8 +69,20 @@ func run() error {
 	}
 	defer informer.Stop()
 
+	// Create Helm client
+	helmClient, err := helm.NewClient(client.Config, "", logger)
+	if err != nil {
+		logger.Warn("Failed to create Helm client - Helm features will be unavailable", "error", err)
+	} else {
+		// Set helm client on informer manager
+		informer.SetHelmClient(helmClient)
+	}
+
+	// Create graph builder for resource visualization
+	graphBuilder := graph.NewBuilder(client, informer, logger)
+
 	// Create UI model
-	model := ui.NewModel(client, informer)
+	model := ui.NewModel(client, informer, graphBuilder)
 
 	// Create Bubbletea program
 	p := tea.NewProgram(

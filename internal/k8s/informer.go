@@ -15,6 +15,7 @@ import (
 )
 
 // Resource represents a generic Kubernetes resource for display
+// Note: This also represents "pseudo-resources" like Helm releases
 type Resource struct {
 	Name       string
 	Namespace  string
@@ -25,6 +26,11 @@ type Resource struct {
 	Labels     map[string]string
 	Raw        *unstructured.Unstructured
 	GVR        schema.GroupVersionResource // The GVR this resource came from
+
+	// Helm-specific fields (only populated for Helm releases)
+	HelmChart     string // Chart name and version (e.g., "nginx-1.2.3")
+	HelmManifest  string // The full manifest of deployed resources
+	IsHelmRelease bool   // True if this is a Helm release
 }
 
 // ResourceType represents a Kubernetes resource type
@@ -36,14 +42,10 @@ type ResourceType struct {
 
 // Common resource types
 var (
+	// Core resources
 	PodResource = ResourceType{
 		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
 		DisplayName: "Pods",
-		Namespaced:  true,
-	}
-	DeploymentResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
-		DisplayName: "Deployments",
 		Namespaced:  true,
 	}
 	ServiceResource = ResourceType{
@@ -61,6 +63,66 @@ var (
 		DisplayName: "Secrets",
 		Namespaced:  true,
 	}
+	PersistentVolumeClaimResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
+		DisplayName: "PersistentVolumeClaims",
+		Namespaced:  true,
+	}
+	ServiceAccountResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"},
+		DisplayName: "ServiceAccounts",
+		Namespaced:  true,
+	}
+
+	// Apps resources
+	DeploymentResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+		DisplayName: "Deployments",
+		Namespaced:  true,
+	}
+	ReplicaSetResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"},
+		DisplayName: "ReplicaSets",
+		Namespaced:  true,
+	}
+	StatefulSetResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"},
+		DisplayName: "StatefulSets",
+		Namespaced:  true,
+	}
+	DaemonSetResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"},
+		DisplayName: "DaemonSets",
+		Namespaced:  true,
+	}
+
+	// Batch resources
+	JobResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"},
+		DisplayName: "Jobs",
+		Namespaced:  true,
+	}
+	CronJobResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"},
+		DisplayName: "CronJobs",
+		Namespaced:  true,
+	}
+
+	// Networking resources
+	IngressResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
+		DisplayName: "Ingresses",
+		Namespaced:  true,
+	}
+
+	// Autoscaling resources
+	HorizontalPodAutoscalerResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
+		DisplayName: "HorizontalPodAutoscalers",
+		Namespaced:  true,
+	}
+
+	// Cluster-scoped resources
 	NamespaceResource = ResourceType{
 		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"},
 		DisplayName: "Namespaces",
@@ -71,18 +133,58 @@ var (
 		DisplayName: "Nodes",
 		Namespaced:  false,
 	}
+	PersistentVolumeResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"},
+		DisplayName: "PersistentVolumes",
+		Namespaced:  false,
+	}
+
+	// Special resource types
+	HelmReleaseResource = ResourceType{
+		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}, // Uses secrets, but filtered
+		DisplayName: "Helm Releases",
+		Namespaced:  true,
+	}
 )
 
 // DefaultResourceTypes returns a list of commonly used resource types
 func DefaultResourceTypes() []ResourceType {
 	return []ResourceType{
+		// Special resource types
+		HelmReleaseResource,
+
+		// Core resources (most commonly viewed)
 		PodResource,
 		DeploymentResource,
 		ServiceResource,
 		ConfigMapResource,
 		SecretResource,
+
+		// Apps resources (important for ownership chains)
+		ReplicaSetResource,
+		StatefulSetResource,
+		DaemonSetResource,
+
+		// Batch resources
+		JobResource,
+		CronJobResource,
+
+		// Storage resources
+		PersistentVolumeClaimResource,
+
+		// Networking resources
+		IngressResource,
+
+		// Identity resources
+		ServiceAccountResource,
+
+		// Autoscaling resources
+		HorizontalPodAutoscalerResource,
+
+		// Cluster-scoped resources
 		NamespaceResource,
 		NodeResource,
+		PersistentVolumeResource,
 	}
 }
 
@@ -96,6 +198,9 @@ type InformerManager struct {
 	resources       map[schema.GroupVersionResource][]Resource
 	activeInformers map[schema.GroupVersionResource]cache.SharedIndexInformer
 	updateCallback  func()
+	ownerIndex      map[string][]Resource // Maps owner UID to owned resources
+	helmResources   []Resource            // Cached Helm releases (handled separately)
+	helmClient      HelmClientInterface   // Helm client interface (defined in helm_integration.go)
 }
 
 // NewInformerManager creates a new dynamic informer manager
@@ -114,6 +219,8 @@ func NewInformerManager(client *Client) (*InformerManager, error) {
 		stopCh:          make(chan struct{}),
 		resources:       make(map[schema.GroupVersionResource][]Resource),
 		activeInformers: make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
+		ownerIndex:      make(map[string][]Resource),
+		helmResources:   []Resource{},
 	}, nil
 }
 
@@ -126,6 +233,11 @@ func (im *InformerManager) SetUpdateCallback(callback func()) {
 
 // StartInformer starts an informer for a specific resource type
 func (im *InformerManager) StartInformer(ctx context.Context, resourceType ResourceType) error {
+	// Special handling for Helm releases - they use a polling mechanism instead of informers
+	if resourceType.DisplayName == "Helm Releases" {
+		return im.startHelmReleasePolling(ctx)
+	}
+
 	im.mu.Lock()
 
 	// Check if informer already exists
@@ -192,6 +304,10 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 	}
 
 	im.resources[gvr] = resources
+
+	// Rebuild owner index for fast lookups
+	im.rebuildOwnerIndex()
+
 	callback := im.updateCallback
 	im.mu.Unlock()
 
@@ -205,6 +321,13 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 func (im *InformerManager) GetResources(gvr schema.GroupVersionResource) []Resource {
 	im.mu.RLock()
 	defer im.mu.RUnlock()
+
+	// Special handling for Helm releases
+	if gvr == HelmReleaseResource.GVR {
+		result := make([]Resource, len(im.helmResources))
+		copy(result, im.helmResources)
+		return result
+	}
 
 	resources := im.resources[gvr]
 	result := make([]Resource, len(resources))
@@ -256,4 +379,88 @@ func (im *InformerManager) GetNamespaces() []string {
 		namespaces[i] = ns.Name
 	}
 	return namespaces
+}
+
+// rebuildOwnerIndex rebuilds the owner UID index from all cached resources
+// Must be called with im.mu locked
+func (im *InformerManager) rebuildOwnerIndex() {
+	// Clear existing index
+	im.ownerIndex = make(map[string][]Resource)
+
+	// Iterate through all cached resources across all GVRs
+	for _, resources := range im.resources {
+		for _, resource := range resources {
+			// Check if this resource has owner references
+			if resource.Raw != nil {
+				owners := resource.Raw.GetOwnerReferences()
+				for _, owner := range owners {
+					ownerUID := string(owner.UID)
+					im.ownerIndex[ownerUID] = append(im.ownerIndex[ownerUID], resource)
+				}
+			}
+		}
+	}
+}
+
+// GetResourcesByOwnerUID returns all resources owned by a specific UID
+func (im *InformerManager) GetResourcesByOwnerUID(ownerUID string) []Resource {
+	im.mu.RLock()
+	defer im.mu.RUnlock()
+
+	// Return a copy to avoid concurrent modification issues
+	owned := im.ownerIndex[ownerUID]
+	result := make([]Resource, len(owned))
+	copy(result, owned)
+	return result
+}
+
+// GetDynamicClient returns the dynamic client for direct API calls
+func (im *InformerManager) GetDynamicClient() dynamic.Interface {
+	return im.dynamicClient
+}
+
+// startHelmReleasePolling starts a background goroutine that polls for Helm releases
+func (im *InformerManager) startHelmReleasePolling(ctx context.Context) error {
+	// Import helm package here to avoid circular dependency
+	// We'll do the initial load synchronously
+	if err := im.refreshHelmReleases(); err != nil {
+		return fmt.Errorf("failed initial Helm release fetch: %w", err)
+	}
+
+	// Start background polling
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-im.stopCh:
+				return
+			case <-ticker.C:
+				if err := im.refreshHelmReleases(); err != nil {
+					// Log error but don't stop polling
+					fmt.Printf("Error refreshing Helm releases: %v\n", err)
+				}
+			}
+		}
+	}()
+
+	return nil
+}
+
+// refreshHelmReleases fetches the latest Helm releases and updates the cache
+func (im *InformerManager) refreshHelmReleases() error {
+	im.mu.RLock()
+	helmClient := im.helmClient
+	im.mu.RUnlock()
+
+	if helmClient == nil {
+		// No helm client configured, keep empty list
+		return nil
+	}
+
+	// Call the implementation in helm_integration.go
+	return im.refreshHelmReleasesImpl(helmClient)
 }

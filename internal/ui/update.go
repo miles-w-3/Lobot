@@ -82,6 +82,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case BuildGraphMsg:
+		// Build the graph for the resource
+		if msg.Resource != nil && m.graphBuilder != nil {
+			resourceGraph := m.graphBuilder.BuildGraph(msg.Resource)
+			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height)
+			m.visualizer = &visualizer
+			m.viewMode = ViewModeVisualize
+			m.statusMessage = fmt.Sprintf("Visualizing %s/%s", msg.Resource.Kind, msg.Resource.Name)
+		}
+		return m, nil
+
 	case EditorFinishedMsg:
 		if msg.Err != nil {
 			// Show error in modal instead of status message
@@ -180,6 +191,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Handle visualizer updates in visualize mode
+	if m.viewMode == ViewModeVisualize && m.visualizer != nil {
+		updatedVisualizer, cmd := m.visualizer.Update(msg)
+		m.visualizer = &updatedVisualizer
+		return m, cmd
+	}
+
 	// Handle table updates in normal mode
 	if m.viewMode == ViewModeNormal {
 		m.table, cmd = m.table.Update(msg)
@@ -207,6 +225,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFilterModeKeys(msg)
 	case ViewModeManifest:
 		return m.handleManifestModeKeys(msg)
+	case ViewModeVisualize:
+		return m.handleVisualizeModeKeys(msg)
 	case ViewModeNormal:
 		return m.handleNormalModeKeys(msg)
 	case ViewModeSplash:
@@ -265,6 +285,15 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.statusMessage = "Opening editor..."
 		return m, m.EditSelectedResource()
 
+	// Visualize resource relationships (Shift+V)
+	case "V":
+		resource := m.GetSelectedResource()
+		if resource != nil {
+			return m, func() tea.Msg {
+				return BuildGraphMsg{Resource: resource}
+			}
+		}
+
 	// Quit
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -316,6 +345,18 @@ func (m Model) handleManifestModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Pass message to viewport for scrolling
 	m.manifestViewport, cmd = m.manifestViewport.Update(msg)
 	return m, cmd
+}
+
+// handleVisualizeModeKeys handles keys in visualization mode
+func (m Model) handleVisualizeModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		m.ExitVisualizeMode()
+		return m, nil
+	}
+
+	// Other keys are handled by the visualizer component itself
+	return m, nil
 }
 
 // handleMouseEvent handles mouse input

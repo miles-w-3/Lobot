@@ -20,6 +20,9 @@ func (m Model) View() string {
 	} else if m.viewMode == ViewModeManifest {
 		// Show manifest viewer if in manifest mode
 		baseView = m.renderManifestView()
+	} else if m.viewMode == ViewModeVisualize {
+		// Show visualizer if in visualize mode
+		baseView = m.renderVisualizeView()
 	} else {
 		// Normal view - full screen with proper layout
 		baseView = m.renderNormalView()
@@ -240,13 +243,23 @@ func (m Model) renderHelp() string {
 			keyStyle.Render("e"),
 			keyStyle.Render("esc"),
 		)
+	case ViewModeVisualize:
+		helpText = fmt.Sprintf(
+			"%s/%s nav | %s expand/collapse | %s toggle details | %s exit",
+			keyStyle.Render("↑/↓"),
+			keyStyle.Render("j/k"),
+			keyStyle.Render("space"),
+			keyStyle.Render("d"),
+			keyStyle.Render("esc/q"),
+		)
 	default:
 		helpText = fmt.Sprintf(
-			"%s/%s nav | %s view | %s edit | %s search | %s namespace | %s/%s resource | %s quit",
+			"%s/%s nav | %s view | %s edit | %s visualize | %s search | %s namespace | %s/%s resource | %s quit",
 			keyStyle.Render("↑/↓"),
 			keyStyle.Render("j/k"),
 			keyStyle.Render("enter"),
 			keyStyle.Render("shift+e"),
+			keyStyle.Render("shift+v"),
 			keyStyle.Render("/"),
 			keyStyle.Render("ctrl+n"),
 			keyStyle.Render("tab"),
@@ -379,4 +392,13 @@ func (m Model) renderSelectorOverlay(baseView string) string {
 	}
 
 	return strings.Join(outputLines, "\n")
+}
+
+// renderVisualizeView renders the visualization mode
+func (m Model) renderVisualizeView() string {
+	if m.visualizer == nil {
+		return "Building resource graph..."
+	}
+
+	return m.visualizer.View()
 }
