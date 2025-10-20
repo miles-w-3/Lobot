@@ -42,10 +42,12 @@ type Model struct {
 	client            *k8s.Client
 	informer          *k8s.InformerManager
 	graphBuilder      *graph.Builder
+	resourceDiscovery *k8s.ResourceDiscovery
 	resourceTypes     []k8s.ResourceType
 	currentType       int
 	resources         []k8s.Resource
 	filteredResources []k8s.Resource
+	discoveredTypes   []k8s.ResourceType // All discovered types from API
 
 	// UI state
 	viewMode      ViewMode
@@ -103,7 +105,7 @@ type BuildGraphMsg struct {
 }
 
 // NewModel creates a new UI model
-func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *graph.Builder) Model {
+func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *graph.Builder, resourceDiscovery *k8s.ResourceDiscovery) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
@@ -136,21 +138,23 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *g
 	t.SetStyles(s)
 
 	return Model{
-		client:          client,
-		informer:        informer,
-		graphBuilder:    graphBuilder,
-		resourceTypes:   k8s.DefaultResourceTypes(),
-		currentType:     0,
-		selectedIndex:   0,
-		scrollOffset:    0,
-		viewMode:        ViewModeSplash,
-		namespaceFilter: filters.NewNamespaceFilter(),
-		nameFilter:      filters.NewResourceNameFilter(),
-		filterInput:     filterInput,
-		splash:          splash.NewModel(),
-		table:           t,
-		ready:           false,
-		alertModal:      NewAlertModal(),
+		client:            client,
+		informer:          informer,
+		graphBuilder:      graphBuilder,
+		resourceDiscovery: resourceDiscovery,
+		resourceTypes:     k8s.DefaultResourceTypes(),
+		discoveredTypes:   []k8s.ResourceType{},
+		currentType:       0,
+		selectedIndex:     0,
+		scrollOffset:      0,
+		viewMode:          ViewModeSplash,
+		namespaceFilter:   filters.NewNamespaceFilter(),
+		nameFilter:        filters.NewResourceNameFilter(),
+		filterInput:       filterInput,
+		splash:            splash.NewModel(),
+		table:             t,
+		ready:             false,
+		alertModal:        NewAlertModal(),
 	}
 }
 
@@ -174,6 +178,9 @@ func (m *Model) UpdateResources() {
 
 	// Then apply name filter
 	m.filteredResources = m.nameFilter.FilterResources(m.filteredResources)
+
+	// Clear rows first to avoid column mismatch during rendering
+	m.table.SetRows([]table.Row{})
 
 	// Update table columns based on resource type
 	var columns []table.Column
@@ -400,6 +407,9 @@ func (m *Model) CurrentResourceType() k8s.ResourceType {
 
 // NextResourceType moves to the next resource type
 func (m *Model) NextResourceType() {
+	if len(m.resourceTypes) == 0 {
+		return // No resource types available
+	}
 	m.currentType = (m.currentType + 1) % len(m.resourceTypes)
 	m.selectedIndex = 0
 	m.scrollOffset = 0
@@ -408,6 +418,9 @@ func (m *Model) NextResourceType() {
 
 // PrevResourceType moves to the previous resource type
 func (m *Model) PrevResourceType() {
+	if len(m.resourceTypes) == 0 {
+		return // No resource types available
+	}
 	m.currentType--
 	if m.currentType < 0 {
 		m.currentType = len(m.resourceTypes) - 1

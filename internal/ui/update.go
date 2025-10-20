@@ -78,6 +78,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case SelectorTypeContext:
 				// TODO: Implement context switching
 				m.statusMessage = "Context switching not yet implemented"
+			case SelectorTypeResourceType:
+				return m, m.ApplyResourceTypeSelection(msg.SelectedValue)
 			}
 		}
 		return m, nil
@@ -275,6 +277,10 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Namespace selector
 	case "ctrl+n":
 		return m, m.OpenNamespaceSelector()
+
+	// Resource type selector (ctrl+t for "Type")
+	case "ctrl+t":
+		return m, m.OpenResourceTypeSelector()
 
 	// View manifest
 	case "enter":

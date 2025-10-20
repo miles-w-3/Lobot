@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
+	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/splash"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -15,6 +17,7 @@ type SelectorType int
 const (
 	SelectorTypeNamespace SelectorType = iota
 	SelectorTypeContext
+	SelectorTypeResourceType
 )
 
 // SelectorModel wraps the promptkit selection model
@@ -38,7 +41,8 @@ func NewNamespaceSelector(namespaces []string, current string) *SelectorModel {
 
 	// Create the selection
 	sel := selection.New("Select Namespace:", choices)
-	sel.Filter = nil // Disable filtering since we have resource name search on /
+	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
+	sel.LoopCursor = true
 
 	// Create the selection model
 	model := selection.NewModel(sel)
@@ -53,7 +57,8 @@ func NewNamespaceSelector(namespaces []string, current string) *SelectorModel {
 // NewContextSelector creates a new context selector
 func NewContextSelector(contexts []string, current string) *SelectorModel {
 	sel := selection.New("Select Cluster Context:", contexts)
-	sel.Filter = nil
+	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
+	sel.LoopCursor = true
 
 	// Create the selection model
 	model := selection.NewModel(sel)
@@ -211,4 +216,121 @@ func (m *Model) ApplyNamespaceSelection(namespace string) {
 		m.namespaceFilter.SetPattern(namespace)
 	}
 	m.UpdateResources()
+}
+
+// NewResourceTypeSelector creates a new resource type selector
+func NewResourceTypeSelector(resourceTypes []string) *SelectorModel {
+	sel := selection.New("Select Resource Type:", resourceTypes)
+	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
+	sel.LoopCursor = true
+
+	// Create the selection model
+	model := selection.NewModel(sel)
+
+	return &SelectorModel{
+		selection:    model,
+		selectorType: SelectorTypeResourceType,
+		visible:      true,
+	}
+}
+
+// OpenResourceTypeSelector opens the resource type selector
+func (m *Model) OpenResourceTypeSelector() tea.Cmd {
+	resourceTypes := m.getAllResourceTypes()
+	m.selector = NewResourceTypeSelector(resourceTypes)
+	return m.selector.Init()
+}
+
+// getAllResourceTypes returns all available resource types for selection
+func (m *Model) getAllResourceTypes() []string {
+	// Discover all resources if not already cached
+	if len(m.discoveredTypes) == 0 && m.resourceDiscovery != nil {
+		discovered, err := m.resourceDiscovery.DiscoverAllResources()
+		if err != nil {
+			m.client.Logger.Error("Failed to discover resources", "error", err)
+			// Fallback to current types
+			displayNames := make([]string, len(m.resourceTypes))
+			for i, rt := range m.resourceTypes {
+				displayNames[i] = rt.DisplayName
+			}
+			return displayNames
+		}
+		m.discoveredTypes = discovered
+	}
+
+	// Return discovered types (alphabetically sorted)
+	displayNames := make([]string, len(m.discoveredTypes))
+	for i, rt := range m.discoveredTypes {
+		displayNames[i] = rt.DisplayName
+	}
+	return displayNames
+}
+
+// ApplyResourceTypeSelection applies the selected resource type
+func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
+	// Find the resource type by display name
+	var selectedType *k8s.ResourceType
+	for i := range m.discoveredTypes {
+		if m.discoveredTypes[i].DisplayName == displayName {
+			selectedType = &m.discoveredTypes[i]
+			break
+		}
+	}
+
+	if selectedType == nil {
+		m.statusMessage = "Resource type not found"
+		return nil
+	}
+
+	// Check if this type is already in our rotation
+	typeIndex := -1
+	for i := range m.resourceTypes {
+		if m.resourceTypes[i].GVR == selectedType.GVR {
+			typeIndex = i
+			break
+		}
+	}
+
+	if typeIndex >= 0 {
+		// Already in rotation, just switch to it
+		m.currentType = typeIndex
+		m.selectedIndex = 0
+		m.scrollOffset = 0
+		m.UpdateResources()
+		return nil
+	}
+
+	// New type - add it to rotation and start informer
+	m.resourceTypes = append(m.resourceTypes, *selectedType)
+	m.currentType = len(m.resourceTypes) - 1
+	m.selectedIndex = 0
+	m.scrollOffset = 0
+
+	// Start informer for this type with splash screen
+	return m.startInformerWithSplash(*selectedType)
+}
+
+// startInformerWithSplash starts an informer and shows splash screen
+func (m *Model) startInformerWithSplash(resourceType k8s.ResourceType) tea.Cmd {
+	// Show splash screen
+	m.viewMode = ViewModeSplash
+	m.splash = splash.NewModel()
+	m.splash.SetSize(m.width, m.height)
+	m.ready = false
+
+	// Return both the splash init command and the informer start command
+	return tea.Batch(
+		m.splash.Init(),
+		func() tea.Msg {
+			// Start the informer in background
+			ctx := context.Background()
+			err := m.informer.StartInformer(ctx, resourceType)
+			if err != nil {
+				m.client.Logger.Error("Failed to start informer", "type", resourceType.DisplayName, "error", err)
+			}
+
+			// Send ready message
+			return ReadyMsg{}
+		},
+	)
 }

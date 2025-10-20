@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -140,9 +139,6 @@ func (m Model) renderStatusLine() string {
 		}
 	}
 
-	// TODO: Get log object better
-	slog.Default().Debug("rendering with clusterName", "name", clusterName)
-
 	currentType := m.CurrentResourceType()
 
 	// Cluster on the left, resource type on the right
@@ -254,7 +250,7 @@ func (m Model) renderHelp() string {
 		)
 	default:
 		helpText = fmt.Sprintf(
-			"%s/%s nav | %s view | %s edit | %s visualize | %s search | %s namespace | %s/%s resource | %s quit",
+			"%s/%s nav | %s view | %s edit | %s visualize | %s search | %s namespace | %s type | %s/%s resource | %s quit",
 			keyStyle.Render("↑/↓"),
 			keyStyle.Render("j/k"),
 			keyStyle.Render("enter"),
@@ -262,6 +258,7 @@ func (m Model) renderHelp() string {
 			keyStyle.Render("shift+v"),
 			keyStyle.Render("/"),
 			keyStyle.Render("ctrl+n"),
+			keyStyle.Render("ctrl+t"),
 			keyStyle.Render("tab"),
 			keyStyle.Render("shift+tab"),
 			keyStyle.Render("q"),
@@ -354,11 +351,11 @@ func (m Model) renderSelectorOverlay(baseView string) string {
 
 	selectorView := m.selector.View()
 
-	// Place the selector at the bottom center of the screen
+	// Place the selector at the bottom left of the screen
 	centeredSelector := lipgloss.Place(
 		m.width,
 		m.height,
-		lipgloss.Center,
+		lipgloss.Left,
 		lipgloss.Bottom,
 		selectorView,
 		lipgloss.WithWhitespaceChars(" "),

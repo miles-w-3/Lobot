@@ -78,11 +78,14 @@ func run() error {
 		informer.SetHelmClient(helmClient)
 	}
 
+	// Create resource discovery service
+	resourceDiscovery := k8s.NewResourceDiscovery(client, logger)
+
 	// Create graph builder for resource visualization
 	graphBuilder := graph.NewBuilder(client, informer, logger)
 
 	// Create UI model
-	model := ui.NewModel(client, informer, graphBuilder)
+	model := ui.NewModel(client, informer, graphBuilder, resourceDiscovery)
 
 	// Create Bubbletea program
 	p := tea.NewProgram(
