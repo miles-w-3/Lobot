@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/miles-w-3/lobot/internal/splash"
 )
@@ -154,12 +155,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Global quit handler - highest priority
-		if msg.String() == "ctrl+c" {
+		// Global keys - highest priority
+		if key.Matches(msg, m.globalKeys.Quit) {
 			return m, tea.Quit
 		}
+		if key.Matches(msg, m.globalKeys.Help) {
+			m.showHelp = !m.showHelp
+			return m, nil
+		}
 
-		// Selector gets highest priority after ctrl+c
+		// Selector gets priority after global keys
 		if m.selector != nil && m.selector.IsVisible() {
 			m.selector, cmd = m.selector.Update(msg)
 			return m, cmd
@@ -241,23 +246,23 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleNormalModeKeys handles keys in normal mode
 func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	// Navigation (handled by table component, but we keep these for consistency)
-	case "up", "k":
+	switch {
+	// Navigation
+	case key.Matches(msg, m.normalKeys.Up):
 		m.MoveUp()
-	case "down", "j":
+	case key.Matches(msg, m.normalKeys.Down):
 		m.MoveDown()
-	case "pgup":
+	case key.Matches(msg, m.normalKeys.PageUp):
 		m.PageUp()
-	case "pgdown":
+	case key.Matches(msg, m.normalKeys.PageDown):
 		m.PageDown()
-	case "home", "g":
+	case key.Matches(msg, m.normalKeys.Home):
 		// Move to top
 		for m.table.Cursor() > 0 {
 			m.table.MoveUp(1)
 		}
 		m.selectedIndex = 0
-	case "end", "G":
+	case key.Matches(msg, m.normalKeys.End):
 		// Move to bottom
 		for m.table.Cursor() < len(m.filteredResources)-1 {
 			m.table.MoveDown(1)
@@ -265,34 +270,34 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectedIndex = len(m.filteredResources) - 1
 
 	// Resource type switching
-	case "tab", "l", "right":
+	case key.Matches(msg, m.normalKeys.NextType):
 		m.NextResourceType()
-	case "shift+tab", "h", "left":
+	case key.Matches(msg, m.normalKeys.PrevType):
 		m.PrevResourceType()
 
 	// Filter by resource name
-	case "/":
+	case key.Matches(msg, m.normalKeys.Filter):
 		m.EnterFilterMode()
 
 	// Namespace selector
-	case "ctrl+n":
+	case key.Matches(msg, m.normalKeys.NamespaceSelector):
 		return m, m.OpenNamespaceSelector()
 
-	// Resource type selector (ctrl+t for "Type")
-	case "ctrl+t":
+	// Resource type selector
+	case key.Matches(msg, m.normalKeys.ResourceTypeSelector):
 		return m, m.OpenResourceTypeSelector()
 
 	// View manifest
-	case "enter":
-		m.EnterManifestMode()
+	case key.Matches(msg, m.normalKeys.Enter):
+		return m, m.EnterManifestMode()
 
-	// Edit resource with external editor (Shift+E)
-	case "E":
+	// Edit resource with external editor
+	case key.Matches(msg, m.normalKeys.Edit):
 		m.statusMessage = "Opening editor..."
 		return m, m.EditSelectedResource()
 
-	// Visualize resource relationships (Shift+V)
-	case "V":
+	// Visualize resource relationships
+	case key.Matches(msg, m.normalKeys.Visualize):
 		resource := m.GetSelectedResource()
 		if resource != nil {
 			return m, func() tea.Msg {
@@ -301,7 +306,7 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	// Quit
-	case "q", "ctrl+c":
+	case key.Matches(msg, m.normalKeys.Quit):
 		return m, tea.Quit
 	}
 
@@ -312,15 +317,15 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleFilterModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	switch msg.String() {
-	case "enter":
+	switch {
+	case key.Matches(msg, m.filterKeys.Accept):
 		// Apply filter
 		pattern := m.filterInput.Value()
 		m.UpdateFilter(pattern)
 		m.ExitFilterMode()
 		return m, nil
 
-	case "esc":
+	case key.Matches(msg, m.filterKeys.Cancel):
 		// Cancel filter
 		m.ExitFilterMode()
 		return m, nil
@@ -337,15 +342,16 @@ func (m Model) handleFilterModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleManifestModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 
-	switch msg.String() {
-	case "esc", "q":
-		m.ExitManifestMode()
-		return m, nil
+	switch {
+	case key.Matches(msg, m.manifestKeys.Back):
+		return m, m.ExitManifestMode()
 
-	// Edit resource with external editor (E key in manifest mode)
-	case "e":
+	case key.Matches(msg, m.manifestKeys.Edit):
 		m.statusMessage = "Opening editor..."
 		return m, m.EditSelectedResource()
+
+	case key.Matches(msg, m.manifestKeys.Copy):
+		return m.CopyManifestToClipboard()
 	}
 
 	// Pass message to viewport for scrolling
@@ -355,13 +361,19 @@ func (m Model) handleManifestModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleVisualizeModeKeys handles keys in visualization mode
 func (m Model) handleVisualizeModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q":
+	switch {
+	case key.Matches(msg, m.visualizerKeys.Back):
 		m.ExitVisualizeMode()
 		return m, nil
 	}
 
-	// Other keys are handled by the visualizer component itself
+	// Pass all other keys to the visualizer component
+	if m.visualizer != nil {
+		updatedVisualizer, cmd := m.visualizer.Update(msg)
+		m.visualizer = &updatedVisualizer
+		return m, cmd
+	}
+
 	return m, nil
 }
 

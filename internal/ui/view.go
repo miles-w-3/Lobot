@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/ansi"
 )
 
 // View renders the UI
@@ -35,6 +36,11 @@ func (m Model) View() string {
 	// If modal is visible, render it as an overlay on top of the base view
 	if m.alertModal.IsVisible() {
 		return m.renderModalOverlay(baseView)
+	}
+
+	// If help is visible, render it as an overlay
+	if m.showHelp {
+		return m.renderHelpOverlay(baseView)
 	}
 
 	return baseView
@@ -112,13 +118,8 @@ func (m Model) renderManifestView() string {
 		Height(m.height - 5).
 		Render(viewportContent)
 
-	// Help text
-	helpText := helpStyle.Render(fmt.Sprintf(
-		"%s/%s scroll | %s back",
-		keyStyle.Render("↑/↓"),
-		keyStyle.Render("pgup/pgdown"),
-		keyStyle.Render("esc"),
-	))
+	// Help text - use KeyMap system
+	helpText := m.renderHelp()
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -221,101 +222,37 @@ func (m Model) renderStatusBar() string {
 	return statusBarStyle.Render(strings.Join(parts, " | "))
 }
 
-// renderHelp renders the help text
+// renderHelp renders the help text using the KeyMap system
 func (m Model) renderHelp() string {
-	var helpText string
+	// Get the appropriate keymap for current mode
+	var helpView string
 
 	switch m.viewMode {
 	case ViewModeFilter:
-		helpText = fmt.Sprintf("%s apply name filter | %s cancel",
-			keyStyle.Render("enter"),
-			keyStyle.Render("esc"),
-		)
+		helpView = m.help.ShortHelpView(m.filterKeys.ShortHelp())
 	case ViewModeManifest:
-		helpText = fmt.Sprintf(
-			"%s/%s scroll | %s edit | %s back",
-			keyStyle.Render("↑/↓"),
-			keyStyle.Render("pgup/pgdown"),
-			keyStyle.Render("e"),
-			keyStyle.Render("esc"),
-		)
+		// Combine mode-specific and global help
+		keys := append(m.manifestKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
+		helpView = m.help.ShortHelpView(keys)
 	case ViewModeVisualize:
-		helpText = fmt.Sprintf(
-			"%s/%s nav | %s expand/collapse | %s toggle details | %s exit",
-			keyStyle.Render("↑/↓"),
-			keyStyle.Render("j/k"),
-			keyStyle.Render("space"),
-			keyStyle.Render("d"),
-			keyStyle.Render("esc/q"),
-		)
+		keys := append(m.visualizerKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
+		helpView = m.help.ShortHelpView(keys)
+	case ViewModeNormal:
+		keys := append(m.normalKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
+		helpView = m.help.ShortHelpView(keys)
 	default:
-		helpText = fmt.Sprintf(
-			"%s/%s nav | %s view | %s edit | %s visualize | %s search | %s namespace | %s type | %s/%s resource | %s quit",
-			keyStyle.Render("↑/↓"),
-			keyStyle.Render("j/k"),
-			keyStyle.Render("enter"),
-			keyStyle.Render("shift+e"),
-			keyStyle.Render("shift+v"),
-			keyStyle.Render("/"),
-			keyStyle.Render("ctrl+n"),
-			keyStyle.Render("ctrl+t"),
-			keyStyle.Render("tab"),
-			keyStyle.Render("shift+tab"),
-			keyStyle.Render("q"),
-		)
+		helpView = m.help.ShortHelpView(m.globalKeys.ShortHelp())
 	}
 
-	return helpStyle.Render(helpText)
+	return helpStyle.Render(helpView)
 }
 
 // renderModalOverlay renders the modal as an overlay on top of the base view
 func (m Model) renderModalOverlay(baseView string) string {
-	// Use lipgloss.Place to properly center the modal
-	// This handles ANSI codes correctly and prevents streaking
 	modalView := m.alertModal.View()
 
-	// Place the modal in the center of the screen, using absolute positioning
-	// This overlays on top of the base view
-	centeredModal := lipgloss.Place(
-		m.width,
-		m.height,
-		lipgloss.Center,
-		lipgloss.Center,
-		modalView,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
-	)
-
-	// Now we need to composite the centered modal on top of the base view
-	// Split both into lines and overlay
-	baseLines := strings.Split(baseView, "\n")
-	modalLines := strings.Split(centeredModal, "\n")
-
-	// Ensure we have the same number of lines
-	maxLines := max(len(baseLines), len(modalLines))
-	outputLines := make([]string, maxLines)
-
-	for i := 0; i < maxLines; i++ {
-		var baseLine, modalLine string
-
-		if i < len(baseLines) {
-			baseLine = baseLines[i]
-		}
-		if i < len(modalLines) {
-			modalLine = modalLines[i]
-		}
-
-		// If modal line is effectively empty (only whitespace/transparent), use base
-		// Otherwise use modal line (which will overlay the base)
-		trimmed := strings.TrimSpace(stripANSI(modalLine))
-		if trimmed == "" {
-			outputLines[i] = baseLine
-		} else {
-			outputLines[i] = modalLine
-		}
-	}
-
-	return strings.Join(outputLines, "\n")
+	// Center and overlay the modal on the base view
+	return overlayCenter(baseView, modalView, m.width, m.height)
 }
 
 // stripANSI removes ANSI escape codes for checking if line has content
@@ -351,20 +288,19 @@ func (m Model) renderSelectorOverlay(baseView string) string {
 
 	selectorView := m.selector.View()
 
-	// Place the selector at the bottom left of the screen
-	centeredSelector := lipgloss.Place(
+	// Place the selector at the bottom left of the screen (fills entire screen)
+	positionedSelector := lipgloss.Place(
 		m.width,
 		m.height,
 		lipgloss.Left,
 		lipgloss.Bottom,
 		selectorView,
-		lipgloss.WithWhitespaceChars(" "),
-		lipgloss.WithWhitespaceForeground(lipgloss.Color("#000000")),
 	)
 
-	// Composite with base view
+	// For selector, we want lipgloss.Place behavior (replaces whole screen)
+	// Split both into lines and use selector where it has content
 	baseLines := strings.Split(baseView, "\n")
-	selectorLines := strings.Split(centeredSelector, "\n")
+	selectorLines := strings.Split(positionedSelector, "\n")
 
 	maxLines := max(len(baseLines), len(selectorLines))
 	outputLines := make([]string, maxLines)
@@ -398,4 +334,147 @@ func (m Model) renderVisualizeView() string {
 	}
 
 	return m.visualizer.View()
+}
+
+// renderHelpOverlay renders the help menu as an overlay
+func (m Model) renderHelpOverlay(baseView string) string {
+	// Get mode-specific and global help
+	modeHelp := m.GetCurrentModeHelp()
+
+	// Combine all key binding groups
+	allGroups := append(modeHelp.FullHelp(), m.globalKeys.FullHelp()...)
+
+	// Render help menu
+	helpView := m.help.FullHelpView(allGroups)
+
+	// Create help box with title
+	helpTitle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("39")).
+		Padding(0, 1).
+		Render("Help - Press ? to close")
+
+	helpContent := lipgloss.JoinVertical(
+		lipgloss.Left,
+		helpTitle,
+		"",
+		helpView,
+	)
+
+	// Style the help box
+	helpBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("39")).
+		Padding(1, 2).
+		Width(min(80, m.width-4)).
+		MaxHeight(m.height - 4).
+		Render(helpContent)
+
+	// Center and overlay the help on the base view
+	return overlayCenter(baseView, helpBox, m.width, m.height)
+}
+
+// overlayCenter overlays content centered on a base view
+func overlayCenter(base, overlay string, width, height int) string {
+	overlayLines := strings.Split(overlay, "\n")
+	overlayHeight := len(overlayLines)
+	overlayWidth := 0
+	for _, line := range overlayLines {
+		w := ansi.PrintableRuneWidth(line)
+		if w > overlayWidth {
+			overlayWidth = w
+		}
+	}
+
+	// Calculate centering offsets
+	offsetY := (height - overlayHeight) / 2
+	offsetX := (width - overlayWidth) / 2
+
+	return overlayAt(base, overlay, offsetX, offsetY, width, height)
+}
+
+// overlayAt overlays content at a specific position
+func overlayAt(base, overlay string, x, y, width, height int) string {
+	baseLines := strings.Split(base, "\n")
+	overlayLines := strings.Split(overlay, "\n")
+
+	// Ensure we have enough base lines
+	for len(baseLines) < height {
+		baseLines = append(baseLines, "")
+	}
+
+	result := make([]string, len(baseLines))
+	copy(result, baseLines)
+
+	// Overlay each line
+	for i, overlayLine := range overlayLines {
+		lineIdx := y + i
+		if lineIdx >= 0 && lineIdx < len(result) {
+			result[lineIdx] = overlayLineAt(result[lineIdx], overlayLine, x)
+		}
+	}
+
+	return strings.Join(result, "\n")
+}
+
+// overlayLineAt inserts overlay string into base line at position x
+// Simplified: just replaces the overlay region with spaces + overlay
+func overlayLineAt(base, overlay string, x int) string {
+	if x < 0 {
+		x = 0
+	}
+
+	baseWidth := ansi.PrintableRuneWidth(base)
+	overlayWidth := ansi.PrintableRuneWidth(overlay)
+	overlayEnd := x + overlayWidth
+
+	// If overlay is completely beyond the base, just append with padding
+	if x >= baseWidth {
+		padding := strings.Repeat(" ", x-baseWidth)
+		return base + padding + overlay
+	}
+
+	// Rune-by-rune iteration to preserve ANSI codes
+	var before, after strings.Builder
+	visualPos := 0
+	inEscape := false
+
+	for _, r := range base {
+		// Track ANSI escape sequences
+		if r == '\x1b' {
+			inEscape = true
+		}
+
+		if inEscape {
+			// Always preserve ANSI codes in appropriate section
+			if visualPos < x {
+				before.WriteRune(r)
+			} else if visualPos >= overlayEnd {
+				after.WriteRune(r)
+			}
+			// Check for end of escape sequence (simplified - matches 'm' which ends color codes)
+			if r == 'm' {
+				inEscape = false
+			}
+		} else {
+			// Visible character - track position and decide where to place it
+			if visualPos < x {
+				before.WriteRune(r)
+			} else if visualPos >= overlayEnd {
+				after.WriteRune(r)
+			}
+			// Only increment visual position for non-ANSI characters
+			visualPos++
+		}
+	}
+
+	return before.String() + overlay + after.String()
+}
+
+// countLines returns the number of lines in a string
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	return len(strings.Split(s, "\n"))
 }

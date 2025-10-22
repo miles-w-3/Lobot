@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/miles-w-3/lobot/internal/graph"
@@ -11,16 +13,27 @@ import (
 	tree "github.com/savannahostrowski/tree-bubble"
 )
 
+// FocusPanel represents which panel is currently focused
+type FocusPanel int
+
+const (
+	FocusTree FocusPanel = iota
+	FocusDetails
+)
+
 // VisualizerModel represents the visualization mode component
 type VisualizerModel struct {
-	treeView     tree.Model
-	graph        *graph.ResourceGraph
-	width        int
-	height       int
-	detailsWidth int
-	showDetails  bool
-	selectedNode *graph.Node
-	rootResource *k8s.Resource // The resource that triggered visualization
+	treeView        tree.Model
+	detailsViewport viewport.Model
+	graph           *graph.ResourceGraph
+	width           int
+	height          int
+	detailsWidth    int
+	showDetails     bool
+	focusedPanel    FocusPanel
+	selectedNode    *graph.Node
+	rootResource    *k8s.Resource // The resource that triggered visualization
+	keys            VisualizerModeKeyMap
 }
 
 // NewVisualizerModel creates a new visualizer model
@@ -35,15 +48,22 @@ func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) V
 	// Create tree view
 	treeView := tree.New(treeNodes, treeWidth, height-4)
 
+	// Create details viewport
+	detailsViewport := viewport.New(detailsWidth-4, height-8)
+	detailsViewport.SetContent("") // Will be populated in renderDetailsPanel
+
 	return VisualizerModel{
-		treeView:     treeView,
-		graph:        resourceGraph,
-		width:        width,
-		height:       height,
-		detailsWidth: detailsWidth,
-		showDetails:  true,
-		selectedNode: resourceGraph.Root,
-		rootResource: resourceGraph.Root.Resource,
+		treeView:        treeView,
+		detailsViewport: detailsViewport,
+		graph:           resourceGraph,
+		width:           width,
+		height:          height,
+		detailsWidth:    detailsWidth,
+		showDetails:     true,
+		focusedPanel:    FocusTree, // Start with tree focused
+		selectedNode:    resourceGraph.Root,
+		rootResource:    resourceGraph.Root.Resource,
+		keys:            DefaultVisualizerModeKeyMap(),
 	}
 }
 
@@ -53,22 +73,44 @@ func (m VisualizerModel) Update(msg tea.Msg) (VisualizerModel, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "d":
+		switch {
+		case key.Matches(msg, m.keys.FocusLeft):
+			// Focus tree panel
+			if m.showDetails {
+				m.focusedPanel = FocusTree
+			}
+			return m, nil
+		case key.Matches(msg, m.keys.FocusRight):
+			// Focus details panel
+			if m.showDetails {
+				m.focusedPanel = FocusDetails
+			}
+			return m, nil
+		case key.Matches(msg, m.keys.ToggleDetails):
 			// Toggle details panel
 			m.showDetails = !m.showDetails
+			// If hiding details, focus must be on tree
+			if !m.showDetails {
+				m.focusedPanel = FocusTree
+			}
 			return m, nil
 		}
 	}
 
-	// Update tree view
-	m.treeView, cmd = m.treeView.Update(msg)
+	// Route navigation to the focused panel
+	if m.focusedPanel == FocusTree {
+		// Update tree view with all remaining messages
+		m.treeView, cmd = m.treeView.Update(msg)
+	} else if m.focusedPanel == FocusDetails && m.showDetails {
+		// Update details viewport (for scrolling)
+		m.detailsViewport, cmd = m.detailsViewport.Update(msg)
+	}
 
 	return m, cmd
 }
 
 // View renders the visualizer
-func (m VisualizerModel) View() string {
+func (m *VisualizerModel) View() string {
 	// Build the view layout
 	if m.showDetails {
 		// Split view: tree on left, details on right
@@ -87,7 +129,7 @@ func (m VisualizerModel) View() string {
 }
 
 // renderTreeView renders the tree visualization
-func (m VisualizerModel) renderTreeView() string {
+func (m *VisualizerModel) renderTreeView() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("39")).
@@ -98,16 +140,23 @@ func (m VisualizerModel) renderTreeView() string {
 		treeWidth = m.width - 4
 	}
 
+	// Highlight border if tree is focused
+	borderColor := lipgloss.Color("240")
+	borderStyle := lipgloss.RoundedBorder()
+	if m.focusedPanel == FocusTree {
+		borderColor = lipgloss.Color("39") // Blue when focused
+	}
+
 	treeBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		Border(borderStyle).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(treeWidth).
 		Height(m.height - 4)
 
 	helpText := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241")).
-		Render("↑/↓: navigate • space: expand/collapse • d: toggle details • esc/q: exit")
+		Render("↑/↓/k/j: navigate • space: expand/collapse • ←/→/h/l: switch panel • d: toggle details • esc/q: exit")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
@@ -118,7 +167,7 @@ func (m VisualizerModel) renderTreeView() string {
 }
 
 // renderDetailsPanel renders the details panel for the selected resource
-func (m VisualizerModel) renderDetailsPanel() string {
+func (m *VisualizerModel) renderDetailsPanel() string {
 	if m.selectedNode == nil {
 		return ""
 	}
@@ -153,14 +202,23 @@ func (m VisualizerModel) renderDetailsPanel() string {
 		}
 	}
 
+	// Update viewport content
+	m.detailsViewport.SetContent(details.String())
+
+	// Highlight border if details panel is focused
+	borderColor := lipgloss.Color("240")
+	if m.focusedPanel == FocusDetails {
+		borderColor = lipgloss.Color("39") // Blue when focused
+	}
+
 	detailsBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(borderColor).
 		Padding(0, 1).
 		Width(m.detailsWidth).
 		Height(m.height - 4)
 
-	return detailsBox.Render(details.String())
+	return detailsBox.Render(m.detailsViewport.View())
 }
 
 // buildTreeNodesFromGraph converts a resource graph into tree nodes for tree-bubble

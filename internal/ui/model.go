@@ -12,6 +12,8 @@ import (
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
+	"github.com/atotto/clipboard"
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -84,6 +86,17 @@ type Model struct {
 
 	// Visualizer
 	visualizer *VisualizerModel
+
+	// Key bindings
+	globalKeys     GlobalKeyMap
+	normalKeys     NormalModeKeyMap
+	manifestKeys   ManifestModeKeyMap
+	visualizerKeys VisualizerModeKeyMap
+	filterKeys     FilterModeKeyMap
+
+	// Help
+	help     help.Model
+	showHelp bool
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -155,6 +168,13 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *g
 		table:             t,
 		ready:             false,
 		alertModal:        NewAlertModal(),
+		globalKeys:        DefaultGlobalKeyMap(),
+		normalKeys:        DefaultNormalModeKeyMap(),
+		manifestKeys:      DefaultManifestModeKeyMap(),
+		visualizerKeys:    DefaultVisualizerModeKeyMap(),
+		filterKeys:        DefaultFilterModeKeyMap(),
+		help:              help.New(),
+		showHelp:          false,
 	}
 }
 
@@ -292,10 +312,10 @@ func (m *Model) GetSelectedResource() *k8s.Resource {
 }
 
 // EnterManifestMode enters manifest viewing mode for the selected resource
-func (m *Model) EnterManifestMode() {
+func (m *Model) EnterManifestMode() tea.Cmd {
 	resource := m.GetSelectedResource()
 	if resource == nil || resource.Raw == nil {
-		return
+		return nil
 	}
 
 	// Format the manifest as YAML
@@ -306,11 +326,43 @@ func (m *Model) EnterManifestMode() {
 	m.manifestViewport.SetContent(m.manifestContent)
 
 	m.viewMode = ViewModeManifest
+
+	// Disable mouse to allow native terminal text selection
+	return tea.DisableMouse
 }
 
 // ExitManifestMode exits manifest viewing mode
-func (m *Model) ExitManifestMode() {
+func (m *Model) ExitManifestMode() tea.Cmd {
 	m.viewMode = ViewModeNormal
+
+	// Re-enable mouse when exiting manifest mode
+	return tea.EnableMouseCellMotion
+}
+
+// CopyManifestToClipboard copies the raw manifest YAML to clipboard
+func (m *Model) CopyManifestToClipboard() (tea.Model, tea.Cmd) {
+	resource := m.GetSelectedResource()
+	if resource == nil || resource.Raw == nil {
+		m.statusMessage = "No manifest to copy"
+		return *m, nil
+	}
+
+	// Marshal to YAML without formatting
+	yamlBytes, err := yaml.Marshal(resource.Raw)
+	if err != nil {
+		m.statusMessage = fmt.Sprintf("Failed to marshal YAML: %v", err)
+		return *m, nil
+	}
+
+	// Copy to clipboard
+	err = clipboard.WriteAll(string(yamlBytes))
+	if err != nil {
+		m.statusMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
+		return *m, nil
+	}
+
+	m.statusMessage = "✓ Manifest copied to clipboard"
+	return *m, nil
 }
 
 // EnterVisualizeMode enters visualization mode for the selected resource
@@ -513,6 +565,22 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// GetCurrentModeHelp returns help bindings for the current mode
+func (m *Model) GetCurrentModeHelp() help.KeyMap {
+	switch m.viewMode {
+	case ViewModeNormal:
+		return m.normalKeys
+	case ViewModeManifest:
+		return m.manifestKeys
+	case ViewModeVisualize:
+		return m.visualizerKeys
+	case ViewModeFilter:
+		return m.filterKeys
+	default:
+		return m.normalKeys
+	}
 }
 
 func formatManifest(obj interface{}) string {
