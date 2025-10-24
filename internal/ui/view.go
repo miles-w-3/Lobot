@@ -101,7 +101,9 @@ func (m Model) renderMainContent(height int) string {
 
 // renderManifestView renders the manifest viewer
 func (m Model) renderManifestView() string {
-	resource := m.GetSelectedResource()
+	// Use the stored manifest resource instead of getting by index
+	// This prevents the title from changing when resources are reordered
+	resource := m.manifestResource
 	if resource == nil {
 		return "No resource selected"
 	}
@@ -418,7 +420,6 @@ func overlayAt(base, overlay string, x, y, width, height int) string {
 }
 
 // overlayLineAt inserts overlay string into base line at position x
-// Simplified: just replaces the overlay region with spaces + overlay
 func overlayLineAt(base, overlay string, x int) string {
 	if x < 0 {
 		x = 0
@@ -452,6 +453,7 @@ func overlayLineAt(base, overlay string, x int) string {
 			} else if visualPos >= overlayEnd {
 				after.WriteRune(r)
 			}
+			// TODO: Handling for other escape eequences
 			// Check for end of escape sequence (simplified - matches 'm' which ends color codes)
 			if r == 'm' {
 				inEscape = false
@@ -469,12 +471,4 @@ func overlayLineAt(base, overlay string, x int) string {
 	}
 
 	return before.String() + overlay + after.String()
-}
-
-// countLines returns the number of lines in a string
-func countLines(s string) int {
-	if s == "" {
-		return 0
-	}
-	return len(strings.Split(s, "\n"))
 }

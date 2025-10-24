@@ -3,6 +3,7 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -302,6 +303,15 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 			resources = append(resources, convertUnstructuredToResource(unstructuredObj, gvr))
 		}
 	}
+
+	// Sort resources by namespace and name for consistent ordering
+	// This prevents resources from jumping around in the UI on refresh
+	sort.Slice(resources, func(i, j int) bool {
+		if resources[i].Namespace != resources[j].Namespace {
+			return resources[i].Namespace < resources[j].Namespace
+		}
+		return resources[i].Name < resources[j].Name
+	})
 
 	im.resources[gvr] = resources
 

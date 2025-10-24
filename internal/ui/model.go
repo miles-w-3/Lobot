@@ -72,6 +72,7 @@ type Model struct {
 	// Manifest viewer
 	manifestViewport viewport.Model
 	manifestContent  string
+	manifestResource *k8s.Resource // The resource being viewed in manifest mode
 
 	// Status
 	ready         bool
@@ -107,9 +108,9 @@ type ReadyMsg struct{}
 
 // EditorFinishedMsg is sent when external editor finishes
 type EditorFinishedMsg struct {
-	Err         error
-	Cancelled   bool
-	BackupPath  string
+	Err        error
+	Cancelled  bool
+	BackupPath string
 }
 
 // BuildGraphMsg is sent to trigger graph building
@@ -318,6 +319,10 @@ func (m *Model) EnterManifestMode() tea.Cmd {
 		return nil
 	}
 
+	// Store the resource reference to prevent issues when the resource list is reordered
+	// This is safe because informer creates new Resource structs on update rather than mutating
+	m.manifestResource = resource
+
 	// Format the manifest as YAML
 	m.manifestContent = formatManifest(resource.Raw)
 
@@ -334,9 +339,43 @@ func (m *Model) EnterManifestMode() tea.Cmd {
 // ExitManifestMode exits manifest viewing mode
 func (m *Model) ExitManifestMode() tea.Cmd {
 	m.viewMode = ViewModeNormal
+	m.manifestResource = nil
 
 	// Re-enable mouse when exiting manifest mode
 	return tea.EnableMouseCellMotion
+}
+
+// RefreshManifestResource refreshes the manifest view with the latest version of the resource
+// This should be called after a successful edit to show the updated resource
+func (m *Model) RefreshManifestResource() {
+	if m.viewMode != ViewModeManifest || m.manifestResource == nil {
+		return
+	}
+
+	// Find the updated resource in the current resource list by matching name, namespace, and kind
+	var updatedResource *k8s.Resource
+	for i := range m.resources {
+		res := &m.resources[i]
+		if res.Name == m.manifestResource.Name &&
+			res.Namespace == m.manifestResource.Namespace &&
+			res.Kind == m.manifestResource.Kind {
+			updatedResource = res
+			break
+		}
+	}
+
+	if updatedResource == nil {
+		// Resource might have been deleted or not yet updated in cache
+		m.statusMessage = "⚠ Could not find updated resource in cache"
+		return
+	}
+
+	// Update the stored reference
+	m.manifestResource = updatedResource
+
+	// Reformat the manifest with the new data
+	m.manifestContent = formatManifest(updatedResource.Raw)
+	m.manifestViewport.SetContent(m.manifestContent)
 }
 
 // CopyManifestToClipboard copies the raw manifest YAML to clipboard
@@ -386,7 +425,14 @@ func (m *Model) ExitVisualizeMode() {
 // EditSelectedResource opens the selected resource in an external editor
 // This properly suspends the BubbleTea program while the editor runs
 func (m *Model) EditSelectedResource() tea.Cmd {
-	resource := m.GetSelectedResource()
+	// If in manifest mode, use the stored resource; otherwise get current selection
+	var resource *k8s.Resource
+	if m.viewMode == ViewModeManifest {
+		resource = m.manifestResource
+	} else {
+		resource = m.GetSelectedResource()
+	}
+
 	if resource == nil {
 		m.statusMessage = "No resource selected"
 		return nil

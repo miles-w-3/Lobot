@@ -151,6 +151,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMessage = "✓ Resource updated successfully"
 			// Trigger a resource refresh to show any updates
 			m.UpdateResources()
+			// If in manifest mode, refresh the manifest view with the updated resource
+			m.RefreshManifestResource()
 		}
 		return m, nil
 
@@ -409,4 +411,3 @@ func WaitForResourceUpdate() tea.Cmd {
 		return ResourceUpdateMsg{}
 	}
 }
-
