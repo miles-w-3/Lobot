@@ -179,12 +179,16 @@ func (m *Model) getNamespacesFromResources() []string {
 
 // getAvailableContexts gets available cluster contexts
 func (m *Model) getAvailableContexts() []string {
-	// TODO: Read from kubeconfig to get all available contexts
-	// For now, return current context
-	if m.client != nil && m.client.Context != "" {
-		return []string{m.client.Context}
+	contexts, _, err := k8s.GetAvailableContexts()
+	if err != nil {
+		// Fallback to current context only if we can't read kubeconfig
+		m.client.Logger.Error("Failed to get available contexts", "error", err)
+		if m.client != nil && m.client.Context != "" {
+			return []string{m.client.Context}
+		}
+		return []string{"default"}
 	}
-	return []string{"default"}
+	return contexts
 }
 
 // OpenNamespaceSelector opens the namespace selector

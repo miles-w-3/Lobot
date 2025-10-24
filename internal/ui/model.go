@@ -118,6 +118,18 @@ type BuildGraphMsg struct {
 	Resource *k8s.Resource
 }
 
+// ContextSwitchMsg is sent when context switch completes successfully
+type ContextSwitchMsg struct {
+	Client   *k8s.Client
+	Informer *k8s.InformerManager
+	Context  string
+}
+
+// ContextSwitchErrorMsg is sent when context switch fails
+type ContextSwitchErrorMsg struct {
+	Error error
+}
+
 // NewModel creates a new UI model
 func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *graph.Builder, resourceDiscovery *k8s.ResourceDiscovery) Model {
 	filterInput := textinput.New()
@@ -142,13 +154,13 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *g
 	s := table.DefaultStyles()
 	s.Header = s.Header.
 		BorderStyle(lipgloss.NormalBorder()).
-		BorderForeground(lipgloss.Color("240")).
+		BorderForeground(ColorPrimary).
 		BorderBottom(true).
-		Bold(false)
+		Bold(true)
 	s.Selected = s.Selected.
-		Foreground(lipgloss.Color("229")).
-		Background(lipgloss.Color("57")).
-		Bold(false)
+		Foreground(lipgloss.Color("255")).
+		Background(ColorSecondary).
+		Bold(true)
 	t.SetStyles(s)
 
 	return Model{
@@ -174,9 +186,20 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *g
 		manifestKeys:      DefaultManifestModeKeyMap(),
 		visualizerKeys:    DefaultVisualizerModeKeyMap(),
 		filterKeys:        DefaultFilterModeKeyMap(),
-		help:              help.New(),
+		help:              configureHelp(),
 		showHelp:          false,
 	}
+}
+
+// configureHelp creates and configures the help model with brand colors
+func configureHelp() help.Model {
+	h := help.New()
+	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(ColorAccent)
+	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ColorMuted)
+	h.Styles.FullKey = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
+	h.Styles.FullDesc = lipgloss.NewStyle().Foreground(ColorMuted)
+	h.Styles.FullSeparator = lipgloss.NewStyle().Foreground(ColorBorder)
+	return h
 }
 
 // Init initializes the model
@@ -569,6 +592,37 @@ func (m *Model) EnterFilterMode() {
 func (m *Model) ExitFilterMode() {
 	m.viewMode = ViewModeNormal
 	m.filterInput.Blur()
+}
+
+// SwitchContext switches to a new Kubernetes context
+func (m *Model) SwitchContext(contextName string) tea.Cmd {
+	return func() tea.Msg {
+		// 1. Stop all informers
+		m.informer.Stop()
+
+		// 2. Create new client with selected context
+		newClient, err := k8s.NewClientWithContext(m.client.Logger, contextName)
+		if err != nil {
+			return ContextSwitchErrorMsg{Error: err}
+		}
+
+		// 3. Create new informer manager
+		newInformer, err := k8s.NewInformerManager(newClient)
+		if err != nil {
+			return ContextSwitchErrorMsg{Error: err}
+		}
+
+		// 4. Set update callback
+		newInformer.SetUpdateCallback(func() {
+			// This callback will be set properly when we handle ContextSwitchMsg
+		})
+
+		return ContextSwitchMsg{
+			Client:   newClient,
+			Informer: newInformer,
+			Context:  contextName,
+		}
+	}
 }
 
 // UpdateFilter updates the resource name filter

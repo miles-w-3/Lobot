@@ -49,21 +49,18 @@ func (m Model) View() string {
 // renderNormalView renders the main resource list view
 func (m Model) renderNormalView() string {
 	// Calculate dimensions
-	contentHeight := m.height - 6 // Leave room for status line, header, and help
+	contentHeight := m.height - 5
 
 	// Status line (cluster and resource type)
 	statusLine := m.renderStatusLine()
 
-	// Header
-	header := m.renderHeader()
-
 	// Main content area with border
-	mainContent := m.renderMainContent(contentHeight - 2) // -2 for border
+	mainContent := m.renderMainContent(contentHeight - 2)
 
 	// Wrap main content in border
 	borderedContent := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorBorder).
+		BorderForeground(colorPrimary).
 		Width(m.width - 2).
 		Height(contentHeight).
 		Render(mainContent)
@@ -74,7 +71,6 @@ func (m Model) renderNormalView() string {
 	// Combine all sections
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
-		header,
 		statusLine,
 		borderedContent,
 		help,
@@ -144,17 +140,20 @@ func (m Model) renderStatusLine() string {
 
 	currentType := m.CurrentResourceType()
 
-	// Cluster on the left, resource type on the right
-	leftStyle := lipgloss.NewStyle().
-		Foreground(colorSecondary).
-		Bold(true)
-
-	rightStyle := lipgloss.NewStyle().
+	// Cluster on the left
+	clusterStyle := lipgloss.NewStyle().
 		Foreground(colorPrimary).
 		Bold(true)
 
-	left := leftStyle.Render(fmt.Sprintf("Cluster: %s", clusterName))
-	right := rightStyle.Render(fmt.Sprintf("Resource: %s", currentType.DisplayName))
+	// Resource type badge on the right
+	resourceBadgeStyle := lipgloss.NewStyle().
+		Foreground(colorSecondary).
+		Background(lipgloss.Color("#1a1a1a")).
+		Bold(true).
+		Padding(0, 1)
+
+	left := clusterStyle.Render(fmt.Sprintf("▶ %s", clusterName))
+	right := resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName))
 
 	// Calculate spacing to push right content to the right
 	spacing := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
@@ -164,8 +163,9 @@ func (m Model) renderStatusLine() string {
 
 	line := left + strings.Repeat(" ", spacing) + right
 
-	// Add padding to make it more visible
 	return lipgloss.NewStyle().
+		Padding(0, 1).
+		MarginBottom(1).
 		Render(line)
 }
 
@@ -197,11 +197,13 @@ func (m Model) renderStatusBar() string {
 	parts := []string{}
 
 	// Resource count
-	countInfo := fmt.Sprintf("Total: %d", len(m.resources))
+	countStyle := lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+	countInfo := fmt.Sprintf("%d resources", len(m.resources))
 	if len(m.filteredResources) != len(m.resources) {
-		countInfo += fmt.Sprintf(" | Filtered: %d", len(m.filteredResources))
+		filteredStyle := lipgloss.NewStyle().Foreground(colorSecondary).Bold(true)
+		countInfo += fmt.Sprintf(" • %s", filteredStyle.Render(fmt.Sprintf("%d shown", len(m.filteredResources))))
 	}
-	parts = append(parts, statusInfoStyle.Render(countInfo))
+	parts = append(parts, countStyle.Render(countInfo))
 
 	// Active filters
 	var activeFilters []string
@@ -217,11 +219,12 @@ func (m Model) renderStatusBar() string {
 	}
 
 	if len(activeFilters) > 0 {
-		filterInfo := fmt.Sprintf("Filters: %s", strings.Join(activeFilters, ", "))
-		parts = append(parts, statusInfoStyle.Render(filterInfo))
+		filterStyle := lipgloss.NewStyle().Foreground(colorAccent)
+		filterInfo := fmt.Sprintf("filters: %s", strings.Join(activeFilters, ", "))
+		parts = append(parts, filterStyle.Render(filterInfo))
 	}
 
-	return statusBarStyle.Render(strings.Join(parts, " | "))
+	return statusBarStyle.Render(strings.Join(parts, "  "))
 }
 
 // renderHelp renders the help text using the KeyMap system
@@ -352,7 +355,7 @@ func (m Model) renderHelpOverlay(baseView string) string {
 	// Create help box with title
 	helpTitle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("39")).
+		Foreground(colorAccent).
 		Padding(0, 1).
 		Render("Help - Press ? to close")
 
@@ -366,7 +369,7 @@ func (m Model) renderHelpOverlay(baseView string) string {
 	// Style the help box
 	helpBox := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("39")).
+		BorderForeground(colorAccent).
 		Padding(1, 2).
 		Width(min(80, m.width-4)).
 		MaxHeight(m.height - 4).

@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
 )
 
@@ -28,7 +30,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			tableHeight = 5
 		}
 		m.table.SetHeight(tableHeight)
-		m.table.SetWidth(m.width - 4)
+		// Table width should fill the border container (border takes 2 chars, content has 4 chars padding)
+		m.table.SetWidth(m.width - 6)
 
 		// Update manifest viewport size if in manifest mode
 		if m.viewMode == ViewModeManifest {
@@ -77,12 +80,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case SelectorTypeNamespace:
 				m.ApplyNamespaceSelection(msg.SelectedValue)
 			case SelectorTypeContext:
-				// TODO: Implement context switching
-				m.statusMessage = "Context switching not yet implemented"
+				// Initiate context switch
+				m.statusMessage = fmt.Sprintf("Switching to context: %s...", msg.SelectedValue)
+				return m, m.SwitchContext(msg.SelectedValue)
 			case SelectorTypeResourceType:
 				return m, m.ApplyResourceTypeSelection(msg.SelectedValue)
 			}
 		}
+		return m, nil
+
+	case ContextSwitchMsg:
+		// Context switch completed successfully
+		m.client = msg.Client
+		m.informer = msg.Informer
+
+		// Clear all cached data
+		m.resources = []k8s.Resource{}
+		m.filteredResources = []k8s.Resource{}
+		m.selectedIndex = 0
+		m.scrollOffset = 0
+
+		// Clear discovered types to force rediscovery in new context
+		m.discoveredTypes = []k8s.ResourceType{}
+
+		// Show splash screen and restart informers
+		m.viewMode = ViewModeSplash
+		m.splash = splash.NewModel()
+		m.splash.SetSize(m.width, m.height)
+		m.ready = false
+
+		// Set up update callback for new informer
+		m.informer.SetUpdateCallback(func() {
+			m.client.Logger.Debug("Resource update triggered")
+			// Send update message to UI
+			// We need to use the program's Send method, but we don't have access to it here
+			// So we'll rely on the polling mechanism in the main loop
+		})
+
+		// Restart informers for current resource types
+		return m, tea.Batch(
+			m.splash.Init(),
+			func() tea.Msg {
+				ctx := context.Background()
+				for _, rt := range m.resourceTypes {
+					if err := m.informer.StartInformer(ctx, rt); err != nil {
+						m.client.Logger.Error("Failed to restart informer", "type", rt.DisplayName, "error", err)
+					}
+				}
+				return ReadyMsg{}
+			},
+		)
+
+	case ContextSwitchErrorMsg:
+		// Context switch failed
+		m.alertModal.Show("Context Switch Failed", msg.Error.Error(), ModalTypeError)
 		return m, nil
 
 	case BuildGraphMsg:
@@ -288,6 +339,10 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Resource type selector
 	case key.Matches(msg, m.normalKeys.ResourceTypeSelector):
 		return m, m.OpenResourceTypeSelector()
+
+	// Context selector
+	case key.Matches(msg, m.normalKeys.ContextSelector):
+		return m, m.OpenContextSelector()
 
 	// View manifest
 	case key.Matches(msg, m.normalKeys.Enter):

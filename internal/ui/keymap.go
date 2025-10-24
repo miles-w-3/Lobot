@@ -59,6 +59,7 @@ type NormalModeKeyMap struct {
 	// Selectors
 	NamespaceSelector    key.Binding
 	ResourceTypeSelector key.Binding
+	ContextSelector      key.Binding
 
 	// Exit
 	Quit key.Binding
@@ -130,6 +131,10 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 			key.WithKeys("ctrl+t"),
 			key.WithHelp("ctrl+t", "select resource type"),
 		),
+		ContextSelector: key.NewBinding(
+			key.WithKeys("ctrl+k"),
+			key.WithHelp("ctrl+k", "select context"),
+		),
 
 		// Exit
 		Quit: key.NewBinding(
@@ -150,7 +155,7 @@ func (k NormalModeKeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Home, k.End},
 		{k.NextType, k.PrevType},
 		{k.Enter, k.Edit, k.Visualize, k.Filter},
-		{k.NamespaceSelector, k.ResourceTypeSelector},
+		{k.NamespaceSelector, k.ResourceTypeSelector, k.ContextSelector},
 		{k.Quit},
 	}
 }

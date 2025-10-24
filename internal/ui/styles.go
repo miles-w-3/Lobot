@@ -3,14 +3,19 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	// Colors
-	colorPrimary   = lipgloss.Color("#7D56F4")
-	colorSecondary = lipgloss.Color("#00D9FF")
-	colorSuccess   = lipgloss.Color("#00FF87")
-	colorWarning   = lipgloss.Color("#FFD700")
-	colorDanger    = lipgloss.Color("#FF5F87")
-	colorMuted     = lipgloss.Color("#626262")
-	colorBorder    = lipgloss.Color("#383838")
+	// Brand colors - imported from colors.go
+	colorPrimary   = ColorPrimary   // Green from splash
+	colorSecondary = ColorSecondary // Purple from splash
+	colorAccent    = ColorAccent    // Blue for help/accents
+
+	// Semantic colors
+	colorSuccess = ColorSuccess
+	colorWarning = ColorWarning
+	colorDanger  = ColorDanger
+
+	// UI element colors
+	colorMuted  = ColorMuted
+	colorBorder = ColorBorder
 
 	// Base styles
 	baseStyle = lipgloss.NewStyle().
@@ -58,7 +63,7 @@ var (
 				Bold(true)
 
 	statusInfoStyle = lipgloss.NewStyle().
-				Foreground(colorSecondary)
+			Foreground(colorSecondary)
 
 	// Filter styles
 	filterBarStyle = lipgloss.NewStyle().
