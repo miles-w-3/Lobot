@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -40,16 +41,14 @@ const (
 
 // Model represents the UI state
 type Model struct {
+	logger *slog.Logger
 	// Kubernetes data
-	client            *k8s.Client
-	informer          *k8s.InformerManager
+	resourceService   *k8s.ResourceService
 	graphBuilder      *graph.Builder
-	resourceDiscovery *k8s.ResourceDiscovery
 	resourceTypes     []k8s.ResourceType
 	currentType       int
 	resources         []k8s.Resource
 	filteredResources []k8s.Resource
-	discoveredTypes   []k8s.ResourceType // All discovered types from API
 
 	// UI state
 	viewMode      ViewMode
@@ -106,6 +105,11 @@ type ResourceUpdateMsg struct{}
 // ReadyMsg is sent when the application is ready
 type ReadyMsg struct{}
 
+// ErrorMsg is sent when an error occurs
+type ErrorMsg struct {
+	Error error
+}
+
 // EditorFinishedMsg is sent when external editor finishes
 type EditorFinishedMsg struct {
 	Err        error
@@ -118,20 +122,13 @@ type BuildGraphMsg struct {
 	Resource *k8s.Resource
 }
 
-// ContextSwitchMsg is sent when context switch completes successfully
-type ContextSwitchMsg struct {
-	Client   *k8s.Client
-	Informer *k8s.InformerManager
-	Context  string
-}
-
 // ContextSwitchErrorMsg is sent when context switch fails
 type ContextSwitchErrorMsg struct {
 	Error error
 }
 
 // NewModel creates a new UI model
-func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *graph.Builder, resourceDiscovery *k8s.ResourceDiscovery) Model {
+func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
@@ -163,31 +160,32 @@ func NewModel(client *k8s.Client, informer *k8s.InformerManager, graphBuilder *g
 		Bold(true)
 	t.SetStyles(s)
 
+	// Create graph builder with the resource service as the provider
+	graphBuilder := graph.NewBuilder(resourceService, nil)
+
 	return Model{
-		client:            client,
-		informer:          informer,
-		graphBuilder:      graphBuilder,
-		resourceDiscovery: resourceDiscovery,
-		resourceTypes:     k8s.DefaultResourceTypes(),
-		discoveredTypes:   []k8s.ResourceType{},
-		currentType:       0,
-		selectedIndex:     0,
-		scrollOffset:      0,
-		viewMode:          ViewModeSplash,
-		namespaceFilter:   filters.NewNamespaceFilter(),
-		nameFilter:        filters.NewResourceNameFilter(),
-		filterInput:       filterInput,
-		splash:            splash.NewModel(),
-		table:             t,
-		ready:             false,
-		alertModal:        NewAlertModal(),
-		globalKeys:        DefaultGlobalKeyMap(),
-		normalKeys:        DefaultNormalModeKeyMap(),
-		manifestKeys:      DefaultManifestModeKeyMap(),
-		visualizerKeys:    DefaultVisualizerModeKeyMap(),
-		filterKeys:        DefaultFilterModeKeyMap(),
-		help:              configureHelp(),
-		showHelp:          false,
+		logger:          logger,
+		resourceService: resourceService,
+		graphBuilder:    graphBuilder,
+		resourceTypes:   k8s.DefaultResourceTypes(),
+		currentType:     0,
+		selectedIndex:   0,
+		scrollOffset:    0,
+		viewMode:        ViewModeSplash,
+		namespaceFilter: filters.NewNamespaceFilter(),
+		nameFilter:      filters.NewResourceNameFilter(),
+		filterInput:     filterInput,
+		splash:          splash.NewModel(logger),
+		table:           t,
+		ready:           false,
+		alertModal:      NewAlertModal(),
+		globalKeys:      DefaultGlobalKeyMap(),
+		normalKeys:      DefaultNormalModeKeyMap(),
+		manifestKeys:    DefaultManifestModeKeyMap(),
+		visualizerKeys:  DefaultVisualizerModeKeyMap(),
+		filterKeys:      DefaultFilterModeKeyMap(),
+		help:            configureHelp(),
+		showHelp:        false,
 	}
 }
 
@@ -209,13 +207,9 @@ func (m Model) Init() tea.Cmd {
 
 // UpdateResources updates the displayed resources from the informer
 func (m *Model) UpdateResources() {
-	if m.informer == nil {
-		return
-	}
-
 	// Get resources for current type
 	currentResourceType := m.resourceTypes[m.currentType]
-	m.resources = m.informer.GetResources(currentResourceType.GVR)
+	m.resources = m.resourceService.GetResources(currentResourceType.GVR)
 
 	// Apply namespace filter first
 	m.filteredResources = m.namespaceFilter.FilterResources(m.resources)
@@ -320,11 +314,10 @@ func (m *Model) adjustScrollOffset() {
 // SetReady marks the model as ready
 func (m *Model) SetReady() {
 	m.ready = true
-	// Use pointer to ensure changes persist
-	(&m.splash).MarkReady()
-	if m.splash.IsDone() {
-		m.viewMode = ViewModeNormal
-	}
+	m.splash.MarkReady()
+
+	m.viewMode = ViewModeNormal
+	m.UpdateResources()
 }
 
 // GetSelectedResource returns the currently selected resource
@@ -462,7 +455,7 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 	}
 
 	// Prepare the edit file BEFORE suspending the TUI
-	editResult, err := m.client.PrepareEditFile(resource)
+	editResult, err := m.resourceService.PrepareEditFile(resource)
 	if err != nil {
 		return func() tea.Msg {
 			return EditorFinishedMsg{Err: fmt.Errorf("failed to prepare edit: %w", err)}
@@ -477,25 +470,21 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 
 	// Create a copy of the resource for the callback
 	resourceCopy := *resource
-	client := m.client
 
 	// Use tea.ExecProcess to properly suspend the TUI and run the editor
-	// This ensures no input conflicts between vim and the TUI
 	return tea.ExecProcess(exec.Command(editor, editResult.TmpFilePath), func(err error) tea.Msg {
 		// Cleanup: remove temporary file when done
 		defer os.Remove(editResult.TmpFilePath)
 
 		// Check if the editor exited with an error
 		if err != nil {
-			// Some editors use exit code 1 to indicate user cancellation
-			// But we can't reliably detect this, so we treat it as an error
 			return EditorFinishedMsg{
 				Err: fmt.Errorf("editor exited with error: %w", err),
 			}
 		}
 
 		// Process the edited file (validates and applies changes)
-		processErr := client.ProcessEditedFile(context.Background(), &resourceCopy, editResult)
+		processErr := m.resourceService.ProcessEditedFile(context.Background(), &resourceCopy, editResult)
 
 		// Check if the user just cancelled (no changes made)
 		if processErr == nil {
@@ -596,33 +585,29 @@ func (m *Model) ExitFilterMode() {
 
 // SwitchContext switches to a new Kubernetes context
 func (m *Model) SwitchContext(contextName string) tea.Cmd {
-	return func() tea.Msg {
-		// 1. Stop all informers
-		m.informer.Stop()
+	// Show splash screen
+	m.viewMode = ViewModeSplash
+	m.splash = splash.NewModel(m.logger)
+	m.splash.SetSize(m.width, m.height)
+	m.ready = false
 
-		// 2. Create new client with selected context
-		newClient, err := k8s.NewClientWithContext(m.client.Logger, contextName)
-		if err != nil {
-			return ContextSwitchErrorMsg{Error: err}
-		}
+	return tea.Batch(
+		m.splash.Init(),
+		func() tea.Msg {
+			if err := m.resourceService.SwitchContext(contextName); err != nil {
+				return ContextSwitchErrorMsg{Error: err}
+			}
 
-		// 3. Create new informer manager
-		newInformer, err := k8s.NewInformerManager(newClient)
-		if err != nil {
-			return ContextSwitchErrorMsg{Error: err}
-		}
+			// Clear UI state
+			m.resources = []k8s.Resource{}
+			m.filteredResources = []k8s.Resource{}
+			m.selectedIndex = 0
+			m.scrollOffset = 0
 
-		// 4. Set update callback
-		newInformer.SetUpdateCallback(func() {
-			// This callback will be set properly when we handle ContextSwitchMsg
-		})
-
-		return ContextSwitchMsg{
-			Client:   newClient,
-			Informer: newInformer,
-			Context:  contextName,
-		}
-	}
+			// TODO: Is this the right message to send?
+			return ResourceUpdateMsg{}
+		},
+	)
 }
 
 // UpdateFilter updates the resource name filter

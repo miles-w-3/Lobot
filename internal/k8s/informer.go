@@ -3,11 +3,13 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
-	// metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/miles-w-3/lobot/internal/helm"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -141,11 +143,17 @@ var (
 	}
 
 	// Special resource types
+	// Helm releases use a pseudo-GVR to avoid conflicting with actual secrets
 	HelmReleaseResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"}, // Uses secrets, but filtered
+		GVR:         schema.GroupVersionResource{Group: "helm.sh", Version: "v3", Resource: "releases"},
 		DisplayName: "Helm Releases",
 		Namespaced:  true,
 	}
+	// ApplicationResource = ResourceType{
+	// 	GVR:         schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"},
+	// 	DisplayName: "ArgoCD Applicaations",
+	// 	Namespaced:  true,
+	// }
 )
 
 // DefaultResourceTypes returns a list of commonly used resource types
@@ -153,6 +161,7 @@ func DefaultResourceTypes() []ResourceType {
 	return []ResourceType{
 		// Special resource types
 		HelmReleaseResource,
+		// ApplicationResource,
 
 		// Core resources (most commonly viewed)
 		PodResource,
@@ -192,20 +201,22 @@ func DefaultResourceTypes() []ResourceType {
 // InformerManager manages dynamic informers for any resource type
 type InformerManager struct {
 	client          *Client
+	logger          *slog.Logger
 	dynamicClient   dynamic.Interface
 	factory         dynamicinformer.DynamicSharedInformerFactory
 	stopCh          chan struct{}
 	mu              sync.RWMutex
 	resources       map[schema.GroupVersionResource][]Resource
 	activeInformers map[schema.GroupVersionResource]cache.SharedIndexInformer
-	updateCallback  func()
+	updateCallback  UpdateCallback
 	ownerIndex      map[string][]Resource // Maps owner UID to owned resources
 	helmResources   []Resource            // Cached Helm releases (handled separately)
 	helmClient      HelmClientInterface   // Helm client interface (defined in helm_integration.go)
+	isInitialized   bool
 }
 
 // NewInformerManager creates a new dynamic informer manager
-func NewInformerManager(client *Client) (*InformerManager, error) {
+func NewInformerManager(client *Client, logger *slog.Logger, updateCallback UpdateCallback) (*InformerManager, error) {
 	dynamicClient, err := dynamic.NewForConfig(client.Config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
@@ -213,7 +224,14 @@ func NewInformerManager(client *Client) (*InformerManager, error) {
 
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, 30*time.Second)
 
+	helmClient, err := helm.NewClient(client.Config, "", logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create helm client: %w", err)
+	}
+	logger.Debug("Initializing informer... (inside)")
+
 	return &InformerManager{
+		logger:          logger,
 		client:          client,
 		dynamicClient:   dynamicClient,
 		factory:         factory,
@@ -222,15 +240,13 @@ func NewInformerManager(client *Client) (*InformerManager, error) {
 		activeInformers: make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
 		ownerIndex:      make(map[string][]Resource),
 		helmResources:   []Resource{},
+		helmClient:      helmClient,
+		updateCallback:  updateCallback,
+		isInitialized:   false,
 	}, nil
 }
 
 // SetUpdateCallback sets a callback function that gets called when resources are updated
-func (im *InformerManager) SetUpdateCallback(callback func()) {
-	im.mu.Lock()
-	defer im.mu.Unlock()
-	im.updateCallback = callback
-}
 
 // StartInformer starts an informer for a specific resource type
 func (im *InformerManager) StartInformer(ctx context.Context, resourceType ResourceType) error {
@@ -317,14 +333,9 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 
 	// Rebuild owner index for fast lookups
 	im.rebuildOwnerIndex()
-
-	callback := im.updateCallback
 	im.mu.Unlock()
 
-	// Trigger update callback outside the lock
-	if callback != nil {
-		go callback()
-	}
+	im.sendCallback(ServiceUpdate{Type: ServiceUpdateResources})
 }
 
 // GetResources returns the cached resources for a specific type
@@ -429,6 +440,39 @@ func (im *InformerManager) GetDynamicClient() dynamic.Interface {
 	return im.dynamicClient
 }
 
+// FetchResource fetches a resource using the dynamic client
+// This is used for resources not in the cache (e.g., owner references to resources we're not watching)
+func (im *InformerManager) FetchResource(ctx context.Context, gvr schema.GroupVersionResource, name, namespace string, expectedUID string) *Resource {
+	var obj *unstructured.Unstructured
+	var err error
+
+	obj, err = im.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		// Try cluster-scoped if namespace lookup failed
+		obj, err = im.dynamicClient.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			im.logger.Debug("Failed to fetch resource via dynamic client",
+				"gvr", gvr.String(),
+				"name", name,
+				"namespace", namespace,
+				"error", err)
+			return nil
+		}
+	}
+
+	// If we were given a UID, verify UID matches (ensure we got the right resource)
+	if expectedUID != "" && string(obj.GetUID()) != expectedUID {
+		im.logger.Warn("Fetched resource UID mismatch",
+			"expected", expectedUID,
+			"got", obj.GetUID())
+		return nil
+	}
+
+	// Convert to our Resource type
+	resource := convertUnstructuredToResource(obj, gvr)
+	return &resource
+}
+
 // startHelmReleasePolling starts a background goroutine that polls for Helm releases
 func (im *InformerManager) startHelmReleasePolling(ctx context.Context) error {
 	// Import helm package here to avoid circular dependency
@@ -473,4 +517,22 @@ func (im *InformerManager) refreshHelmReleases() error {
 
 	// Call the implementation in helm_integration.go
 	return im.refreshHelmReleasesImpl(helmClient)
+}
+
+// convey that this instance
+func (im *InformerManager) markInitialized() {
+	// im.mu.RUnlock()
+	// defer im.mu.RLock()
+	im.isInitialized = true
+}
+
+func (im *InformerManager) sendCallback(callbackDetails ServiceUpdate) {
+	// don't send callbacks when we're still initializing, many operations are happening and it's wasteful
+	if im.isInitialized {
+		im.logger.Debug("Sending update callback")
+		im.updateCallback(callbackDetails)
+	} else {
+		im.logger.Debug("Not sending update callback")
+	}
+
 }

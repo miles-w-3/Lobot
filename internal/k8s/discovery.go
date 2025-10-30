@@ -3,6 +3,7 @@ package k8s
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -91,7 +92,7 @@ func (rd *ResourceDiscovery) DiscoverAllResources() ([]ResourceType, error) {
 
 			// Add group suffix for CRDs to distinguish them
 			if gv.Group != "" && gv.Group != "apps" && gv.Group != "batch" &&
-			   gv.Group != "networking.k8s.io" && gv.Group != "autoscaling" {
+				gv.Group != "networking.k8s.io" && gv.Group != "autoscaling" {
 				displayName = fmt.Sprintf("%s (%s)", displayName, gv.Group)
 			}
 
@@ -136,10 +137,28 @@ func (rd *ResourceDiscovery) RefreshCache() error {
 
 // supportsVerb checks if a resource supports a specific verb
 func supportsVerb(verbs []string, verb string) bool {
-	for _, v := range verbs {
-		if v == verb {
-			return true
+	return slices.Contains(verbs, verb)
+}
+
+// DiscoverResourceName uses the discovery API to find the resource name for a given Kind
+// This is used to convert owner references (which use Kind) to GVRs (which use resource name)
+func (rd *ResourceDiscovery) DiscoverResourceName(gv schema.GroupVersion, kind string) (string, error) {
+	// Get API resources for this group/version
+	apiResourceList, err := rd.discoveryClient.ServerResourcesForGroupVersion(gv.String())
+	if err != nil {
+		return "", err
+	}
+
+	// Find the resource that matches this Kind
+	for _, apiResource := range apiResourceList.APIResources {
+		if apiResource.Kind == kind {
+			return apiResource.Name, nil
 		}
 	}
-	return false
+
+	// Fallback: try simple pluralization
+	rd.logger.Debug("Kind not found in discovery, using simple pluralization",
+		"kind", kind,
+		"groupVersion", gv.String())
+	return strings.ToLower(kind) + "s", nil
 }

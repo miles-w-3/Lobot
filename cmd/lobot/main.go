@@ -9,8 +9,6 @@ import (
 	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/miles-w-3/lobot/internal/graph"
-	"github.com/miles-w-3/lobot/internal/helm"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/ui"
 )
@@ -41,7 +39,6 @@ func main() {
 }
 
 func run() error {
-	// Get the configured logger (set in main())
 	logger := slog.Default()
 
 	// Create context for graceful shutdown
@@ -62,30 +59,15 @@ func run() error {
 		return fmt.Errorf("failed to create Kubernetes client: %w", err)
 	}
 
-	// Create informer manager
-	informer, err := k8s.NewInformerManager(client)
+	// Create ResourceService
+	resourceService, err := k8s.NewResourceService(ctx, client, logger)
 	if err != nil {
-		return fmt.Errorf("failed to create informer manager: %w", err)
+		return fmt.Errorf("failed to create resource service: %w", err)
 	}
-	defer informer.Stop()
-
-	// Create Helm client
-	helmClient, err := helm.NewClient(client.Config, "", logger)
-	if err != nil {
-		logger.Warn("Failed to create Helm client - Helm features will be unavailable", "error", err)
-	} else {
-		// Set helm client on informer manager
-		informer.SetHelmClient(helmClient)
-	}
-
-	// Create resource discovery service
-	resourceDiscovery := k8s.NewResourceDiscovery(client, logger)
-
-	// Create graph builder for resource visualization
-	graphBuilder := graph.NewBuilder(client, informer, logger)
+	defer resourceService.Close()
 
 	// Create UI model
-	model := ui.NewModel(client, informer, graphBuilder, resourceDiscovery)
+	model := ui.NewModel(resourceService, logger)
 
 	// Create Bubbletea program
 	p := tea.NewProgram(
@@ -94,36 +76,26 @@ func run() error {
 		tea.WithMouseCellMotion(),
 	)
 
-	// Set up callback for resource updates
-	informer.SetUpdateCallback(func() {
-		p.Send(ui.ResourceUpdateMsg{})
-	})
+	// Forward messages into the model and UI
+	processUpdateCallback := func(update k8s.ServiceUpdate) {
+		logger.Debug("Processing update callback", "type", update.Type, "context", update.Context)
+		switch update.Type {
+		case k8s.ServiceUpdateResources:
+			p.Send(ui.ResourceUpdateMsg{})
+		case k8s.ServiceUpdateReady:
+			logger.Info("System ready", "context", update.Context)
+			p.Send(ui.ReadyMsg{})
+		case k8s.ServiceUpdateError:
+			logger.Error("Resource service error", "error", update.Error)
+			// Send error to UI instead of just logging
+			p.Send(ui.ErrorMsg{Error: update.Error})
+		}
+	}
 
-	// Start informers in background
+	// Start resource service initialization in background after program starts
+	// This ensures the UI is running and can receive/display errors
 	go func() {
-		// Start with default resource types
-		resourceTypes := k8s.DefaultResourceTypes()
-
-		// Start informer for the first resource type (Pods)
-		if len(resourceTypes) > 0 {
-			if err := informer.StartInformer(ctx, resourceTypes[0]); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to start informer for %s: %v\n",
-					resourceTypes[0].DisplayName, err)
-				return
-			}
-		}
-
-		// Start remaining informers
-		for i := 1; i < len(resourceTypes); i++ {
-			if err := informer.StartInformer(ctx, resourceTypes[i]); err != nil {
-				fmt.Fprintf(os.Stderr, "Failed to start informer for %s: %v\n",
-					resourceTypes[i].DisplayName, err)
-			}
-		}
-
-		// Mark model as ready and trigger initial update
-		p.Send(ui.ReadyMsg{})
-		p.Send(ui.ResourceUpdateMsg{})
+		resourceService.FinalizeConfiguration(processUpdateCallback)
 	}()
 
 	// Run the program

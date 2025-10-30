@@ -8,7 +8,6 @@ import (
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SelectorType represents the type of selector
@@ -137,21 +136,9 @@ func (s *SelectorModel) IsVisible() bool {
 
 // getAllNamespaces queries the Kubernetes API for all namespaces
 func (m *Model) getAllNamespaces() []string {
-	if m.client == nil || m.client.Clientset == nil {
-		return []string{}
-	}
-
-	// Query all namespaces from the cluster
-	namespaceList, err := m.client.Clientset.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
+	namespaces, err := m.resourceService.GetAllNamespaces(context.Background())
 	if err != nil {
-		// If we can't fetch namespaces, fall back to extracting from resources
-		m.client.Logger.Error("Failed to list namespaces", "error", err)
 		return m.getNamespacesFromResources()
-	}
-
-	namespaces := make([]string, 0, len(namespaceList.Items))
-	for _, ns := range namespaceList.Items {
-		namespaces = append(namespaces, ns.Name)
 	}
 
 	sort.Strings(namespaces)
@@ -179,12 +166,11 @@ func (m *Model) getNamespacesFromResources() []string {
 
 // getAvailableContexts gets available cluster contexts
 func (m *Model) getAvailableContexts() []string {
-	contexts, _, err := k8s.GetAvailableContexts()
+	contexts, _, err := m.resourceService.GetAvailableContexts()
 	if err != nil {
-		// Fallback to current context only if we can't read kubeconfig
-		m.client.Logger.Error("Failed to get available contexts", "error", err)
-		if m.client != nil && m.client.Context != "" {
-			return []string{m.client.Context}
+		current := m.resourceService.GetCurrentContext()
+		if current != "" {
+			return []string{current}
 		}
 		return []string{"default"}
 	}
@@ -202,10 +188,7 @@ func (m *Model) OpenNamespaceSelector() tea.Cmd {
 // OpenContextSelector opens the context selector
 func (m *Model) OpenContextSelector() tea.Cmd {
 	contexts := m.getAvailableContexts()
-	current := ""
-	if m.client != nil {
-		current = m.client.Context
-	}
+	current := m.resourceService.GetCurrentContext()
 	m.selector = NewContextSelector(contexts, current)
 	return m.selector.Init()
 }
@@ -247,24 +230,20 @@ func (m *Model) OpenResourceTypeSelector() tea.Cmd {
 
 // getAllResourceTypes returns all available resource types for selection
 func (m *Model) getAllResourceTypes() []string {
-	// Discover all resources if not already cached
-	if len(m.discoveredTypes) == 0 && m.resourceDiscovery != nil {
-		discovered, err := m.resourceDiscovery.DiscoverAllResources()
-		if err != nil {
-			m.client.Logger.Error("Failed to discover resources", "error", err)
-			// Fallback to current types
-			displayNames := make([]string, len(m.resourceTypes))
-			for i, rt := range m.resourceTypes {
-				displayNames[i] = rt.DisplayName
-			}
-			return displayNames
+	// Discover all resources from the cluster
+	discovered, err := m.resourceService.GetAllResourceTypes()
+	if err != nil {
+		// Fallback to default types if discovery fails
+		displayNames := make([]string, len(m.resourceTypes))
+		for i, rt := range m.resourceTypes {
+			displayNames[i] = rt.DisplayName
 		}
-		m.discoveredTypes = discovered
+		return displayNames
 	}
 
-	// Return discovered types (alphabetically sorted)
-	displayNames := make([]string, len(m.discoveredTypes))
-	for i, rt := range m.discoveredTypes {
+	// Return discovered types (alphabetically sorted by discovery)
+	displayNames := make([]string, len(discovered))
+	for i, rt := range discovered {
 		displayNames[i] = rt.DisplayName
 	}
 	return displayNames
@@ -272,11 +251,18 @@ func (m *Model) getAllResourceTypes() []string {
 
 // ApplyResourceTypeSelection applies the selected resource type
 func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
+	// Discover all resource types to find the selected one
+	discovered, err := m.resourceService.GetAllResourceTypes()
+	if err != nil {
+		m.statusMessage = "Failed to discover resource types"
+		return nil
+	}
+
 	// Find the resource type by display name
 	var selectedType *k8s.ResourceType
-	for i := range m.discoveredTypes {
-		if m.discoveredTypes[i].DisplayName == displayName {
-			selectedType = &m.discoveredTypes[i]
+	for i := range discovered {
+		if discovered[i].DisplayName == displayName {
+			selectedType = &discovered[i]
 			break
 		}
 	}
@@ -318,7 +304,7 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 func (m *Model) startInformerWithSplash(resourceType k8s.ResourceType) tea.Cmd {
 	// Show splash screen
 	m.viewMode = ViewModeSplash
-	m.splash = splash.NewModel()
+	m.splash = splash.NewModel(m.logger)
 	m.splash.SetSize(m.width, m.height)
 	m.ready = false
 
@@ -327,10 +313,10 @@ func (m *Model) startInformerWithSplash(resourceType k8s.ResourceType) tea.Cmd {
 		m.splash.Init(),
 		func() tea.Msg {
 			// Start the informer in background
-			ctx := context.Background()
-			err := m.informer.StartInformer(ctx, resourceType)
+			err := m.resourceService.StartInformer(resourceType)
 			if err != nil {
-				m.client.Logger.Error("Failed to start informer", "type", resourceType.DisplayName, "error", err)
+				// Error logged by service layer
+				// TODO: Show in modal!!!
 			}
 
 			// Send ready message

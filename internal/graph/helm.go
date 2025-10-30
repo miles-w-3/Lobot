@@ -18,7 +18,6 @@ func (b *Builder) BuildHelmGraph(helmRelease *k8s.Resource) *ResourceGraph {
 		"namespace", helmRelease.Namespace)
 
 	b.logger.Debug("Helm release manifest length", "length", len(helmRelease.HelmManifest))
-	b.logger.Debug("Helm manifest is", helmRelease.HelmManifest)
 
 	// Parse the Helm manifest to extract individual resource definitions
 	manifestResources := b.parseHelmManifest(helmRelease.HelmManifest, helmRelease.Namespace)
@@ -122,7 +121,7 @@ func (b *Builder) findResourceInCluster(manifestResource k8s.Resource) *k8s.Reso
 	}
 
 	// Get all cached resources of this type
-	cachedResources := b.informer.GetResources(gvr)
+	cachedResources := b.provider.GetResources(gvr)
 
 	// Find the resource by name and namespace
 	for i := range cachedResources {
@@ -138,9 +137,9 @@ func (b *Builder) findResourceInCluster(manifestResource k8s.Resource) *k8s.Reso
 		"apiVersion", manifestResource.APIVersion,
 		"name", manifestResource.Name,
 		"namespace", manifestResource.Namespace)
-	// Not found in cache - try with dynamic client
+	// Not found in cache - try fetching via API
 	// We won't have the UIDs for these resources
-	resource := b.fetchResourceViaDynamicClient(gvr, manifestResource.Name, manifestResource.Namespace, "")
+	resource := b.provider.FetchResource(gvr, manifestResource.Name, manifestResource.Namespace, "")
 
 	// TODO: If resource down't have helm annotation, add a warning or note
 	if resource != nil {

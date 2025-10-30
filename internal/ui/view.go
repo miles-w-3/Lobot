@@ -129,15 +129,7 @@ func (m Model) renderManifestView() string {
 
 // renderStatusLine renders the top status line with cluster and resource type
 func (m Model) renderStatusLine() string {
-	clusterName := "unknown"
-	if m.client != nil {
-		if m.client.Context != "" {
-			clusterName = m.client.Context
-		} else if m.client.ClusterName != "" {
-			clusterName = m.client.ClusterName
-		}
-	}
-
+	clusterName := m.resourceService.GetClusterName()
 	currentType := m.CurrentResourceType()
 
 	// Cluster on the left

@@ -1,6 +1,7 @@
 package splash
 
 import (
+	"log/slog"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,24 +14,27 @@ const (
 	PhaseDrawing Phase = iota
 	PhaseShowingX
 	PhaseClearing
-	PhaseWaiting // New phase: waiting for connection
+	PhaseWaiting // Waiting for connection
+	PhaseError   // Connection error occurred
 	PhaseDone
 )
 
 type TickMsg struct{}
 
 type Model struct {
-	sprite      [][]rune
-	width       int
-	height      int
-	step        int
-	phase       Phase
-	termWidth   int
-	termHeight  int
-	readyToExit bool
+	sprite       [][]rune
+	width        int
+	height       int
+	step         int
+	phase        Phase
+	termWidth    int
+	termHeight   int
+	readyToExit  bool
+	errorMessage string // Error message to display in error state
+	logger       *slog.Logger
 }
 
-func NewModel() Model {
+func NewModel(logger *slog.Logger) Model {
 	sprite := []string{
 		"           GGGGGGGGGGG           ",
 		"           G         G           ",
@@ -55,6 +59,7 @@ func NewModel() Model {
 		width:  len(grid[0]),
 		height: len(grid),
 		phase:  PhaseDrawing,
+		logger: logger,
 	}
 }
 
@@ -71,6 +76,7 @@ func longTick() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	m.logger.Debug("Running update in", "type", msg, "mode", m.phase, "err", m.errorMessage)
 	switch msg.(type) {
 	case TickMsg:
 		switch m.phase {
@@ -90,18 +96,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			m.step--
 			// Clear top to bottom (step goes from height down to 0)
 			if m.step <= 0 {
+				m.logger.Debug("Done with clearing", "rte", m.readyToExit)
 				// Animation complete - check if we're ready to exit
 				if m.readyToExit {
 					m.phase = PhaseDone
 				} else {
 					m.phase = PhaseWaiting
+					// tick again so we can handle any waiting logic
+					return m, tick()
 				}
+				m.logger.Debug("Phase is now", "phase", m.phase)
 				// Stop ticking once we reach waiting/done phase - face is now cleared
 				return m, nil
 			}
 			return m, tick()
 		case PhaseWaiting:
+			m.logger.Debug("Errm", "msg", m.errorMessage)
+			if m.errorMessage != "" {
+				m.phase = PhaseError
+				m.logger.Debug("Switching to error phase now that we are in waiting")
+			}
 			// Stay in waiting phase until external signal
+			return m, nil
+		case PhaseError:
+			m.logger.Debug("In error phase update")
+			// Stay in error phase until user takes action
 			return m, nil
 		case PhaseDone:
 			return m, nil
@@ -118,6 +137,23 @@ func (m *Model) MarkReady() {
 		m.phase = PhaseDone
 	}
 	// Otherwise, we'll transition to done when clearing completes
+}
+
+// MarkError marks the splash as having an error
+func (m *Model) MarkError(err error) {
+	m.errorMessage = err.Error()
+	// If we're in waiting phase, transition to error immediately
+	if m.phase == PhaseWaiting {
+		m.phase = PhaseError
+	} else {
+		m.logger.Debug("We got an error, but we're not in waiting phase (lol)", "phase", m.phase)
+	}
+	m.logger.Debug("Msg is now", "msg", m.errorMessage)
+}
+
+// IsError returns true if splash is in error state
+func (m Model) IsError() bool {
+	return m.phase == PhaseError
 }
 
 // IsDone returns true if the splash is complete
@@ -158,9 +194,7 @@ func (m Model) View() string {
 		out += "\n"
 	}
 
-	// === Add title when appropriate ===
-	if true { //m.phase >= PhaseShowingX {
-		title := `__/\\\___________________/\\\\\_______/\\\\\\\\\\\\\_________/\\\\\_______/\\\\\\\\\\\\\\\_
+	title := `__/\\\___________________/\\\\\_______/\\\\\\\\\\\\\_________/\\\\\_______/\\\\\\\\\\\\\\\_
  _\/\\\_________________/\\\///\\\____\/\\\/////////\\\_____/\\\///\\\____\///////\\\/////__
   _\/\\\_______________/\\\/__\///\\\__\/\\\_______\/\\\___/\\\/__\///\\\________\/\\\_______
    _\/\\\______________/\\\______\//\\\_\/\\\\\\\\\\\\\\___/\\\______\//\\\_______\/\\\_______
@@ -169,16 +203,29 @@ func (m Model) View() string {
       _\/\\\______________\///\\\__/\\\____\/\\\_______\/\\\__\///\\\__/\\\__________\/\\\_______
        _\/\\\\\\\\\\\\\\\____\///\\\\\/_____\/\\\\\\\\\\\\\/_____\///\\\\\/___________\/\\\_______
         _\///////////////_______\/////_______\/////////////_________\/////_____________\///________`
-		out += green.Render(title)
+	out += green.Render(title)
 
-		// Add "Connecting..." message during waiting phase
-		if m.phase == PhaseWaiting {
-			statusStyle := lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#7D56F4")).
-				Italic(true).
-				MarginTop(2)
-			out += "\n\n" + statusStyle.Render("Connecting to Kubernetes cluster...")
-		}
+	// Add status message based on phase
+	switch m.phase {
+	case PhaseWaiting:
+		statusStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7D56F4")).
+			Italic(true).
+			MarginTop(2)
+		out += "\n\n" + statusStyle.Render("Connecting to Kubernetes cluster...")
+	case PhaseError:
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			Bold(true).
+			MarginTop(2)
+
+		instructionStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FFA500")).
+			MarginTop(1)
+
+		out += "\n\n" + errorStyle.Render("⚠ Connection Failed")
+		//out += "\n\n" + instructionStyle.Render(m.errorMessage)
+		out += "\n\n" + instructionStyle.Render("Press 'c' to switch context | Press 'q' to quit")
 	}
 
 	// Center the content horizontally and vertically in the terminal

@@ -1,44 +1,44 @@
 package graph
 
 import (
-	"context"
 	"log/slog"
-	"strings"
 
 	"github.com/miles-w-3/lobot/internal/k8s"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/discovery"
 )
 
 const (
 	// MaxDepth defines the maximum depth to traverse in either direction
-	MaxDepth = 5
+	MaxDepth = 5 // TODO: User-configurable?
 )
+
+// ResourceProvider defines the interface for accessing Kubernetes resources
+// This abstraction allows the graph builder to work with any service that can provide resources
+type ResourceProvider interface {
+	GetResources(gvr schema.GroupVersionResource) []k8s.Resource
+	GetResourcesByOwnerUID(uid string) []k8s.Resource
+	FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) *k8s.Resource
+	DiscoverResourceName(gv schema.GroupVersion, kind string) (string, error)
+}
 
 // Builder builds resource graphs by discovering relationships
 type Builder struct {
-	informer        *k8s.InformerManager
-	discoveryClient discovery.DiscoveryInterface
-	logger          *slog.Logger
-	ctx             context.Context
-	kindToGVR       map[string]schema.GroupVersionResource // Cache for Kind -> GVR lookups
+	provider  ResourceProvider
+	logger    *slog.Logger
+	kindToGVR map[string]schema.GroupVersionResource // Cache for Kind -> GVR lookups
 }
 
 // NewBuilder creates a new graph builder
-func NewBuilder(client *k8s.Client, informer *k8s.InformerManager, logger *slog.Logger) *Builder {
+func NewBuilder(provider ResourceProvider, logger *slog.Logger) *Builder {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	return &Builder{
-		informer:        informer,
-		discoveryClient: client.Clientset.Discovery(),
-		logger:          logger,
-		ctx:             context.Background(),
-		kindToGVR:       make(map[string]schema.GroupVersionResource),
+		provider:  provider,
+		logger:    logger,
+		kindToGVR: make(map[string]schema.GroupVersionResource),
 	}
 }
 
@@ -141,7 +141,7 @@ func (b *Builder) traverseOwned(graph *ResourceGraph, node *Node, visited map[st
 
 	// Use the owner UID index for fast lookup
 	ownerUID := string(node.Resource.Raw.GetUID())
-	ownedResources := b.informer.GetResourcesByOwnerUID(ownerUID)
+	ownedResources := b.provider.GetResourcesByOwnerUID(ownerUID)
 
 	for i := range ownedResources {
 		owned := &ownedResources[i]
@@ -170,7 +170,7 @@ func (b *Builder) findOwnerResource(childResource *k8s.Resource, ownerRef metav1
 	}
 
 	// First, try to find in cached resources (fast path)
-	cachedResources := b.informer.GetResources(gvr)
+	cachedResources := b.provider.GetResources(gvr)
 	for i := range cachedResources {
 		res := &cachedResources[i]
 		if res.Name == ownerRef.Name &&
@@ -180,13 +180,13 @@ func (b *Builder) findOwnerResource(childResource *k8s.Resource, ownerRef metav1
 		}
 	}
 
-	// Not in cache - fetch via dynamic client (slow path)
+	// Not in cache - fetch via API (slow path)
 	b.logger.Debug("Owner not in cache, fetching via API",
 		"owner", ownerRef.Name,
 		"kind", ownerRef.Kind,
 		"namespace", childResource.Namespace)
 
-	return b.fetchResourceViaDynamicClient(gvr, ownerRef.Name, childResource.Namespace, ownerRef.UID)
+	return b.provider.FetchResource(gvr, ownerRef.Name, childResource.Namespace, string(ownerRef.UID))
 }
 
 // ownerRefToGVR converts an ownerReference to a GroupVersionResource
@@ -223,87 +223,5 @@ func (b *Builder) ownerRefToGVR(ownerRef metav1.OwnerReference) (schema.GroupVer
 
 // discoverResourceName uses the discovery API to find the resource name for a given Kind
 func (b *Builder) discoverResourceName(gv schema.GroupVersion, kind string) (string, error) {
-	// Get API resources for this group/version
-	apiResourceList, err := b.discoveryClient.ServerResourcesForGroupVersion(gv.String())
-	if err != nil {
-		return "", err
-	}
-
-	// Find the resource that matches this Kind
-	for _, apiResource := range apiResourceList.APIResources {
-		if apiResource.Kind == kind {
-			return apiResource.Name, nil
-		}
-	}
-
-	// Fallback: try simple pluralization
-	b.logger.Debug("Kind not found in discovery, using simple pluralization",
-		"kind", kind,
-		"groupVersion", gv.String())
-	return strings.ToLower(kind) + "s", nil
-}
-
-// fetchResourceViaDynamicClient fetches a resource using the dynamic client
-func (b *Builder) fetchResourceViaDynamicClient(gvr schema.GroupVersionResource, name, namespace string, expectedUID types.UID) *k8s.Resource {
-	dynamicClient := b.informer.GetDynamicClient()
-
-	var obj, err = dynamicClient.Resource(gvr).Namespace(namespace).Get(b.ctx, name, metav1.GetOptions{})
-	if err != nil {
-		// Try cluster-scoped if namespace lookup failed
-		obj, err = dynamicClient.Resource(gvr).Get(b.ctx, name, metav1.GetOptions{})
-		if err != nil {
-			b.logger.Debug("Failed to fetch resource via dynamic client",
-				"gvr", gvr.String(),
-				"name", name,
-				"namespace", namespace,
-				"error", err)
-			return nil
-		}
-	}
-
-	// If we were given a UID, verify UID matches (ensure we got the right resource)
-	if expectedUID != "" && obj.GetUID() != expectedUID {
-		b.logger.Warn("Fetched resource UID mismatch",
-			"expected", expectedUID,
-			"got", obj.GetUID())
-		return nil
-	}
-
-	// Convert to our Resource type
-	resource := k8s.Resource{
-		Name:       obj.GetName(),
-		Namespace:  obj.GetNamespace(),
-		Kind:       obj.GetKind(),
-		APIVersion: obj.GetAPIVersion(),
-		Status:     extractStatus(obj),
-		Age:        metav1.Now().Time.Sub(obj.GetCreationTimestamp().Time),
-		Labels:     obj.GetLabels(),
-		Raw:        obj,
-		GVR:        gvr,
-	}
-	return &resource
-}
-
-// extractStatus extracts status from an unstructured object
-func extractStatus(obj *unstructured.Unstructured) string {
-	statusMap, found, _ := unstructured.NestedMap(obj.Object, "status")
-	if !found {
-		return "Unknown"
-	}
-
-	// Try common status fields
-	if phase, found, _ := unstructured.NestedString(statusMap, "phase"); found {
-		return phase
-	}
-
-	if conditions, found, _ := unstructured.NestedSlice(statusMap, "conditions"); found && len(conditions) > 0 {
-		// Get the last condition status
-		if lastCond, ok := conditions[len(conditions)-1].(map[string]interface{}); ok {
-			if condType, found := lastCond["type"]; found {
-				return condType.(string)
-			}
-		}
-	}
-
-	return "Unknown"
+	return b.provider.DiscoverResourceName(gv, kind)
 }

@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -11,6 +12,16 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 )
 
+/*
+ * Track the scoped namespace. We are global if we have deselected namespace
+ * this is done because kubernetes semantics equate ""/unset with the default namespace,
+ * but in Lobot we default to global scope
+ */
+type CurrentScopedNamespace struct {
+	value    string
+	isGlobal bool
+}
+
 // Client wraps the Kubernetes clientset
 type Client struct {
 	Clientset   *kubernetes.Clientset
@@ -18,6 +29,7 @@ type Client struct {
 	ClusterName string
 	Context     string
 	Logger      *slog.Logger
+	ScopedNS    CurrentScopedNamespace
 }
 
 // NewClient creates a new Kubernetes client
@@ -41,7 +53,7 @@ func NewClient(logger *slog.Logger) (*Client, error) {
 	logger.Debug("Got kubeconfig", "context", context, "cluster", clusterName)
 	if err != nil {
 		logger.Warn("Failed to load kubeconfig, falling back to in-cluster config", "error", err)
-		// Fall back to in-cluster config
+		// Fall back to in-cluster config TODO: I don't think we want to do this
 		config, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load kubeconfig or in-cluster config: %w", err)
@@ -66,6 +78,9 @@ func NewClient(logger *slog.Logger) (*Client, error) {
 		ClusterName: clusterName,
 		Context:     context,
 		Logger:      logger,
+		// by default, global scope - don't care what's in k8s context
+		// could in future respect user config to load in from config
+		ScopedNS: CurrentScopedNamespace{value: "", isGlobal: true},
 	}, nil
 }
 
@@ -209,4 +224,17 @@ func loadKubeConfigWithContextOverride(contextName string) (*rest.Config, string
 	}
 
 	return config, clusterName, nil
+}
+
+// HealthCheck verifies that the cluster is reachable
+// Returns error if cluster is unreachable, nil otherwise
+func (c *Client) HealthCheck(ctx context.Context) error {
+	// Try a simple API call - discovery is lightweight
+	// The context timeout is managed by the caller
+	_, err := c.Clientset.Discovery().ServerVersion()
+	if err != nil {
+		return fmt.Errorf("cluster unreachable: %w", err)
+	}
+
+	return nil
 }

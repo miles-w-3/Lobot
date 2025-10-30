@@ -1,13 +1,11 @@
 package ui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
 )
 
@@ -62,11 +60,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ReadyMsg:
 		m.SetReady()
-		// If splash is done or we're past the animation, transition immediately
-		if m.viewMode == ViewModeSplash && m.ready {
-			if m.splash.IsDone() {
-				m.viewMode = ViewModeNormal
-			}
+		return m, nil
+
+	case ErrorMsg:
+		m.err = msg.Error
+		m.logger.Debug("Handling error message", "msg", msg.Error)
+
+		// If we're in splash mode, mark splash as error
+		if m.viewMode == ViewModeSplash {
+			m.splash.MarkError(msg.Error)
+		} else {
+			// TODO: Use modal
+			// In normal mode, show error in status or modal
+			m.statusMessage = fmt.Sprintf("Error: %v", msg.Error)
 		}
 		return m, nil
 
@@ -89,48 +95,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case ContextSwitchMsg:
-		// Context switch completed successfully
-		m.client = msg.Client
-		m.informer = msg.Informer
-
-		// Clear all cached data
-		m.resources = []k8s.Resource{}
-		m.filteredResources = []k8s.Resource{}
-		m.selectedIndex = 0
-		m.scrollOffset = 0
-
-		// Clear discovered types to force rediscovery in new context
-		m.discoveredTypes = []k8s.ResourceType{}
-
-		// Show splash screen and restart informers
-		m.viewMode = ViewModeSplash
-		m.splash = splash.NewModel()
-		m.splash.SetSize(m.width, m.height)
-		m.ready = false
-
-		// Set up update callback for new informer
-		m.informer.SetUpdateCallback(func() {
-			m.client.Logger.Debug("Resource update triggered")
-			// Send update message to UI
-			// We need to use the program's Send method, but we don't have access to it here
-			// So we'll rely on the polling mechanism in the main loop
-		})
-
-		// Restart informers for current resource types
-		return m, tea.Batch(
-			m.splash.Init(),
-			func() tea.Msg {
-				ctx := context.Background()
-				for _, rt := range m.resourceTypes {
-					if err := m.informer.StartInformer(ctx, rt); err != nil {
-						m.client.Logger.Error("Failed to restart informer", "type", rt.DisplayName, "error", err)
-					}
-				}
-				return ReadyMsg{}
-			},
-		)
-
 	case ContextSwitchErrorMsg:
 		// Context switch failed
 		m.alertModal.Show("Context Switch Failed", msg.Error.Error(), ModalTypeError)
@@ -138,7 +102,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case BuildGraphMsg:
 		// Build the graph for the resource
-		if msg.Resource != nil && m.graphBuilder != nil {
+		if msg.Resource != nil {
 			resourceGraph := m.graphBuilder.BuildGraph(msg.Resource)
 			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height)
 			m.visualizer = &visualizer
@@ -272,7 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global keys (work in all modes)
 	switch msg.String() {
-	case "ctrl+c", "q":
+	case "ctrl+c", "q": // TODO: USe the key scheme/binding names
 		// Allow quitting from splash mode or normal mode
 		if m.viewMode == ViewModeNormal || m.viewMode == ViewModeSplash {
 			return m, tea.Quit
@@ -290,6 +254,14 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ViewModeNormal:
 		return m.handleNormalModeKeys(msg)
 	case ViewModeSplash:
+		// Allow context switching if we're in error state
+		// // TODO: Use key bindings instead of straight up
+		if m.splash.IsError() && msg.String() == "c" {
+			contexts := m.getAvailableContexts()
+			current := m.resourceService.GetCurrentContext()
+			m.selector = NewContextSelector(contexts, current)
+			return m, m.selector.Init()
+		}
 		// No other keys needed in splash mode
 		return m, nil
 	}

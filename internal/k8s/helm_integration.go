@@ -2,7 +2,6 @@ package k8s
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 
 	"helm.sh/helm/v3/pkg/release"
@@ -11,13 +10,6 @@ import (
 // HelmClientInterface allows us to work with helm client without import cycle
 type HelmClientInterface interface {
 	ListReleases(namespace string, allNamespaces bool) ([]*release.Release, error)
-}
-
-// SetHelmClient sets up helm client integration for the informer manager
-func (im *InformerManager) SetHelmClient(helmClient HelmClientInterface) {
-	im.mu.Lock()
-	im.helmClient = helmClient
-	im.mu.Unlock()
 }
 
 // refreshHelmReleasesImpl is the actual implementation that uses the helm client
@@ -42,22 +34,15 @@ func (im *InformerManager) refreshHelmReleasesImpl(helmClient HelmClientInterfac
 	im.mu.Lock()
 	im.helmResources = helmResources
 	im.mu.Unlock()
-
-	// Trigger update callback
-	im.mu.RLock()
-	callback := im.updateCallback
-	im.mu.RUnlock()
-
-	if callback != nil {
-		go callback()
-	}
-
-	slog.Default().Debug("Refreshed Helm releases", "count", len(helmResources))
+	// im.logger.Debug("About to send update callback")
+	im.sendCallback(ServiceUpdate{Type: ServiceUpdateResources})
+	im.logger.Debug("Refreshed Helm releases", "count", len(helmResources))
 
 	return nil
 }
 
 // convertReleaseToResource converts a Helm release to a k8s.Resource for display
+// in the future, we could decouple the display from the k8s resource type
 func convertReleaseToResource(rel *release.Release) Resource {
 	// Format chart name and version
 	chartName := "unknown"

@@ -2,7 +2,7 @@
 out.log
 
 # Binary
-lobot
+/lobot
 
 # Go build artifacts
 *.o
@@ -12,6 +12,3 @@ lobot
 # Go test files
 *.test
 *.out
-
-# Dependency directories
-vendor/
