@@ -32,6 +32,7 @@ type Resource struct {
 
 	// Helm-specific fields (only populated for Helm releases)
 	HelmChart     string // Chart name and version (e.g., "nginx-1.2.3")
+	HelmRevision  int    // Helm release revision number
 	HelmManifest  string // The full manifest of deployed resources
 	IsHelmRelease bool   // True if this is a Helm release
 }
@@ -515,24 +516,18 @@ func (im *InformerManager) refreshHelmReleases() error {
 		return nil
 	}
 
-	// Call the implementation in helm_integration.go
 	return im.refreshHelmReleasesImpl(helmClient)
 }
 
-// convey that this instance
 func (im *InformerManager) markInitialized() {
-	// im.mu.RUnlock()
-	// defer im.mu.RLock()
 	im.isInitialized = true
 }
 
 func (im *InformerManager) sendCallback(callbackDetails ServiceUpdate) {
-	// don't send callbacks when we're still initializing, many operations are happening and it's wasteful
 	if im.isInitialized {
 		im.logger.Debug("Sending update callback")
 		im.updateCallback(callbackDetails)
 	} else {
 		im.logger.Debug("Not sending update callback")
 	}
-
 }

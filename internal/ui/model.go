@@ -74,12 +74,10 @@ type Model struct {
 	manifestResource *k8s.Resource // The resource being viewed in manifest mode
 
 	// Status
-	ready         bool
-	err           error
-	statusMessage string
+	ready bool
 
 	// Modal
-	alertModal *AlertModal
+	modal *Modal
 
 	// Selector (for namespace/context selection)
 	selector *SelectorModel
@@ -93,10 +91,6 @@ type Model struct {
 	manifestKeys   ManifestModeKeyMap
 	visualizerKeys VisualizerModeKeyMap
 	filterKeys     FilterModeKeyMap
-
-	// Help
-	help     help.Model
-	showHelp bool
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -120,11 +114,6 @@ type EditorFinishedMsg struct {
 // BuildGraphMsg is sent to trigger graph building
 type BuildGraphMsg struct {
 	Resource *k8s.Resource
-}
-
-// ContextSwitchErrorMsg is sent when context switch fails
-type ContextSwitchErrorMsg struct {
-	Error error
 }
 
 // NewModel creates a new UI model
@@ -178,14 +167,12 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 		splash:          splash.NewModel(logger),
 		table:           t,
 		ready:           false,
-		alertModal:      NewAlertModal(),
+		modal:           NewModal(),
 		globalKeys:      DefaultGlobalKeyMap(),
 		normalKeys:      DefaultNormalModeKeyMap(),
 		manifestKeys:    DefaultManifestModeKeyMap(),
 		visualizerKeys:  DefaultVisualizerModeKeyMap(),
 		filterKeys:      DefaultFilterModeKeyMap(),
-		help:            configureHelp(),
-		showHelp:        false,
 	}
 }
 
@@ -382,7 +369,6 @@ func (m *Model) RefreshManifestResource() {
 
 	if updatedResource == nil {
 		// Resource might have been deleted or not yet updated in cache
-		m.statusMessage = "⚠ Could not find updated resource in cache"
 		return
 	}
 
@@ -398,25 +384,24 @@ func (m *Model) RefreshManifestResource() {
 func (m *Model) CopyManifestToClipboard() (tea.Model, tea.Cmd) {
 	resource := m.GetSelectedResource()
 	if resource == nil || resource.Raw == nil {
-		m.statusMessage = "No manifest to copy"
 		return *m, nil
 	}
 
 	// Marshal to YAML without formatting
 	yamlBytes, err := yaml.Marshal(resource.Raw)
 	if err != nil {
-		m.statusMessage = fmt.Sprintf("Failed to marshal YAML: %v", err)
+		m.modal.ShowError("Copy Failed", "Failed to marshal YAML: "+err.Error())
 		return *m, nil
 	}
 
 	// Copy to clipboard
 	err = clipboard.WriteAll(string(yamlBytes))
 	if err != nil {
-		m.statusMessage = fmt.Sprintf("Failed to copy to clipboard: %v", err)
+		m.modal.ShowError("Copy Failed", "Failed to copy to clipboard: "+err.Error())
 		return *m, nil
 	}
 
-	m.statusMessage = "✓ Manifest copied to clipboard"
+	// Silent success
 	return *m, nil
 }
 
@@ -424,11 +409,9 @@ func (m *Model) CopyManifestToClipboard() (tea.Model, tea.Cmd) {
 func (m *Model) EnterVisualizeMode() {
 	resource := m.GetSelectedResource()
 	if resource == nil {
-		m.statusMessage = "No resource selected"
 		return
 	}
 
-	m.statusMessage = "Building resource graph..."
 	// The graph building will be done in the update handler
 }
 
@@ -450,7 +433,6 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 	}
 
 	if resource == nil {
-		m.statusMessage = "No resource selected"
 		return nil
 	}
 
@@ -500,11 +482,6 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 			Err: processErr,
 		}
 	})
-}
-
-// SetError sets an error on the model
-func (m *Model) SetError(err error) {
-	m.err = err
 }
 
 // CurrentResourceType returns the currently selected resource type
@@ -595,16 +572,14 @@ func (m *Model) SwitchContext(contextName string) tea.Cmd {
 		m.splash.Init(),
 		func() tea.Msg {
 			if err := m.resourceService.SwitchContext(contextName); err != nil {
-				return ContextSwitchErrorMsg{Error: err}
+				return ErrorMsg{Error: fmt.Errorf("context switch failed: %w", err)}
 			}
 
-			// Clear UI state
 			m.resources = []k8s.Resource{}
 			m.filteredResources = []k8s.Resource{}
 			m.selectedIndex = 0
 			m.scrollOffset = 0
 
-			// TODO: Is this the right message to send?
 			return ResourceUpdateMsg{}
 		},
 	)
@@ -621,13 +596,6 @@ func (m *Model) UpdateFilter(pattern string) {
 // Helper functions
 func max(a, b int) int {
 	if a > b {
-		return a
-	}
-	return b
-}
-
-func min(a, b int) int {
-	if a < b {
 		return a
 	}
 	return b

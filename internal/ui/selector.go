@@ -254,7 +254,7 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 	// Discover all resource types to find the selected one
 	discovered, err := m.resourceService.GetAllResourceTypes()
 	if err != nil {
-		m.statusMessage = "Failed to discover resource types"
+		m.modal.ShowError("Discovery Failed", "Failed to discover resource types: "+err.Error())
 		return nil
 	}
 
@@ -268,7 +268,7 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 	}
 
 	if selectedType == nil {
-		m.statusMessage = "Resource type not found"
+		m.modal.ShowError("Not Found", "Resource type not found: "+displayName)
 		return nil
 	}
 

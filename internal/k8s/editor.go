@@ -5,11 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 )
@@ -85,15 +84,11 @@ func (c *Client) ProcessEditedFile(ctx context.Context, resource *Resource, edit
 	// Parse edited YAML
 	var editedObj map[string]interface{}
 	if err := yaml.Unmarshal(editedBytes, &editedObj); err != nil {
-		// Save the failed edit for user recovery
-		c.SaveFailedEdit(resource, editedBytes, err)
 		return fmt.Errorf("failed to parse edited YAML (syntax error): %w", err)
 	}
 
 	// Validate the edited manifest
 	if err := c.ValidateEditedManifest(resource, editedObj); err != nil {
-		// Save the failed edit for user recovery
-		c.SaveFailedEdit(resource, editedBytes, err)
 		return err
 	}
 
@@ -101,8 +96,6 @@ func (c *Client) ProcessEditedFile(ctx context.Context, resource *Resource, edit
 
 	// Apply the changes
 	if err := c.UpdateResource(ctx, resource, editedObj); err != nil {
-		// Save the failed edit for user recovery
-		c.SaveFailedEdit(resource, editedBytes, err)
 		return err
 	}
 
@@ -163,21 +156,6 @@ func (c *Client) ValidateEditedManifest(original *Resource, editedObj map[string
 
 	c.Logger.Debug("Manifest validation passed", "name", name, "kind", kind)
 	return nil
-}
-
-// SaveFailedEdit saves a failed edit to a backup file so the user doesn't lose their work
-func (c *Client) SaveFailedEdit(resource *Resource, editedContent []byte, originalErr error) {
-	backupPath := fmt.Sprintf("/tmp/lobot-failed-edit-%s-%s-%d.yaml",
-		resource.Kind,
-		resource.Name,
-		time.Now().Unix())
-
-	if err := os.WriteFile(backupPath, editedContent, 0600); err != nil {
-		c.Logger.Error("Failed to save backup of edited content", "error", err)
-		return
-	}
-
-	c.Logger.Info("Saved failed edit to backup file", "path", backupPath, "original_error", originalErr)
 }
 
 // UpdateResource updates a Kubernetes resource with new content

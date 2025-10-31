@@ -115,7 +115,7 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 		),
 		Visualize: key.NewBinding(
 			key.WithKeys("V"),
-			key.WithHelp("V", "visualize relationships"),
+			key.WithHelp("V", "visualize"),
 		),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
@@ -242,9 +242,9 @@ func (k ManifestModeKeyMap) FullHelp() [][]key.Binding {
 // VisualizerModeKeyMap defines key bindings for visualizer mode
 type VisualizerModeKeyMap struct {
 	// Navigation
-	Up       key.Binding
-	Down     key.Binding
-	Expand   key.Binding
+	Up     key.Binding
+	Down   key.Binding
+	Expand key.Binding
 
 	// Panel focus
 	FocusLeft  key.Binding

@@ -79,6 +79,7 @@ func convertReleaseToResource(rel *release.Release) Resource {
 		Raw:           nil, // We don't have an unstructured.Unstructured for Helm releases
 		GVR:           HelmReleaseResource.GVR,
 		HelmChart:     chartName,
+		HelmRevision:  rel.Version,
 		HelmManifest:  manifest,
 		IsHelmRelease: true,
 	}

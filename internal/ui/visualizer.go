@@ -45,8 +45,25 @@ func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) V
 	detailsWidth := 40
 	treeWidth := width - detailsWidth - 4 // Account for borders and padding
 
-	// Create tree view
+	// Create tree view with custom styles
 	treeView := tree.New(treeNodes, treeWidth, height-4)
+
+	// Apply custom styles to match application theme
+	treeView.Styles = tree.Styles{
+		Shapes: lipgloss.NewStyle().
+			Margin(0, 0, 0, 0).
+			Foreground(ColorSecondary), // Use consistent purple
+		Selected: lipgloss.NewStyle().
+			Margin(0, 0, 0, 0).
+			Background(ColorSecondary). // Use consistent purple background
+			Foreground(lipgloss.Color("#FFFFFF")), // White text for better visibility
+		Unselected: lipgloss.NewStyle().
+			Margin(0, 0, 0, 0).
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}),
+		Help: lipgloss.NewStyle().
+			Margin(0, 0, 0, 0).
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}),
+	}
 
 	// Create details viewport
 	detailsViewport := viewport.New(detailsWidth-4, height-8)
@@ -132,8 +149,8 @@ func (m *VisualizerModel) View() string {
 func (m *VisualizerModel) renderTreeView() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("39")).
-		Render("📊 Resource Relationships")
+		Foreground(ColorPrimary).
+		Render("▶ Resource Relationships")
 
 	treeWidth := m.width - m.detailsWidth - 4
 	if !m.showDetails {
@@ -141,10 +158,10 @@ func (m *VisualizerModel) renderTreeView() string {
 	}
 
 	// Highlight border if tree is focused
-	borderColor := lipgloss.Color("240")
+	borderColor := ColorMuted
 	borderStyle := lipgloss.RoundedBorder()
 	if m.focusedPanel == FocusTree {
-		borderColor = lipgloss.Color("39") // Blue when focused
+		borderColor = ColorPrimary // Green when focused
 	}
 
 	treeBox := lipgloss.NewStyle().
@@ -155,7 +172,7 @@ func (m *VisualizerModel) renderTreeView() string {
 		Height(m.height - 4)
 
 	helpText := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("241")).
+		Foreground(ColorMuted).
 		Render("↑/↓/k/j: navigate • space: expand/collapse • ←/→/h/l: switch panel • d: toggle details • esc/q: exit")
 
 	return lipgloss.JoinVertical(
@@ -184,6 +201,10 @@ func (m *VisualizerModel) renderDetailsPanel() string {
 		details.WriteString(fmt.Sprintf("Namespace: %s\n", res.Namespace))
 	}
 	details.WriteString(fmt.Sprintf("Status: %s\n", res.Status))
+	// Show revision for Helm releases
+	if res.IsHelmRelease && res.HelmRevision > 0 {
+		details.WriteString(fmt.Sprintf("Revision: %d\n", res.HelmRevision))
+	}
 	details.WriteString(fmt.Sprintf("Age: %s\n", formatAge(res.Age)))
 
 	// Show owner references
@@ -206,9 +227,9 @@ func (m *VisualizerModel) renderDetailsPanel() string {
 	m.detailsViewport.SetContent(details.String())
 
 	// Highlight border if details panel is focused
-	borderColor := lipgloss.Color("240")
+	borderColor := ColorMuted
 	if m.focusedPanel == FocusDetails {
-		borderColor = lipgloss.Color("39") // Blue when focused
+		borderColor = ColorPrimary // Green when focused
 	}
 
 	detailsBox := lipgloss.NewStyle().
@@ -300,7 +321,7 @@ func formatResourceNameWithRoot(node *graph.Node, rootResource *k8s.Resource, is
 	if node.Metadata["missing"] == "true" {
 		// Gray out missing resources
 		return lipgloss.NewStyle().
-			Foreground(lipgloss.Color("240")).
+			Foreground(ColorMuted).
 			Render("[Missing] " + nameWithNamespace)
 	}
 
@@ -308,8 +329,8 @@ func formatResourceNameWithRoot(node *graph.Node, rootResource *k8s.Resource, is
 	if isRoot {
 		return lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("226")). // Yellow highlight for root
-			Render(nameWithNamespace + " ⭐")
+			Foreground(ColorWarning). // Yellow highlight for root
+			Render(nameWithNamespace + " ●")
 	}
 
 	// Color by resource kind
@@ -352,15 +373,15 @@ func formatResourceDesc(node *graph.Node) string {
 	if strings.Contains(strings.ToLower(status), "running") ||
 		strings.Contains(strings.ToLower(status), "ready") ||
 		strings.Contains(strings.ToLower(status), "active") {
-		style = style.Foreground(lipgloss.Color("10")) // Green
+		style = style.Foreground(ColorSuccess)
 	} else if strings.Contains(strings.ToLower(status), "pending") ||
 		strings.Contains(strings.ToLower(status), "creating") {
-		style = style.Foreground(lipgloss.Color("11")) // Yellow
+		style = style.Foreground(ColorWarning)
 	} else if strings.Contains(strings.ToLower(status), "failed") ||
 		strings.Contains(strings.ToLower(status), "error") {
-		style = style.Foreground(lipgloss.Color("9")) // Red
+		style = style.Foreground(ColorDanger)
 	} else {
-		style = style.Foreground(lipgloss.Color("8")) // Gray
+		style = style.Foreground(ColorMuted)
 	}
 
 	return style.Render(fmt.Sprintf("[%s] %s", status, indicator))

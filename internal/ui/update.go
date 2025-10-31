@@ -40,7 +40,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Update modal size
 		modalWidth := min(80, m.width-10)
 		modalHeight := min(20, m.height-10)
-		m.alertModal.SetSize(modalWidth, modalHeight)
+		m.modal.SetSize(modalWidth, modalHeight)
 
 		return m, nil
 
@@ -63,16 +63,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ErrorMsg:
-		m.err = msg.Error
-		m.logger.Debug("Handling error message", "msg", msg.Error)
-
-		// If we're in splash mode, mark splash as error
 		if m.viewMode == ViewModeSplash {
 			m.splash.MarkError(msg.Error)
 		} else {
-			// TODO: Use modal
-			// In normal mode, show error in status or modal
-			m.statusMessage = fmt.Sprintf("Error: %v", msg.Error)
+			m.modal.ShowError("Error", msg.Error.Error())
 		}
 		return m, nil
 
@@ -87,17 +81,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.ApplyNamespaceSelection(msg.SelectedValue)
 			case SelectorTypeContext:
 				// Initiate context switch
-				m.statusMessage = fmt.Sprintf("Switching to context: %s...", msg.SelectedValue)
 				return m, m.SwitchContext(msg.SelectedValue)
 			case SelectorTypeResourceType:
 				return m, m.ApplyResourceTypeSelection(msg.SelectedValue)
 			}
 		}
-		return m, nil
-
-	case ContextSwitchErrorMsg:
-		// Context switch failed
-		m.alertModal.Show("Context Switch Failed", msg.Error.Error(), ModalTypeError)
 		return m, nil
 
 	case BuildGraphMsg:
@@ -107,7 +95,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height)
 			m.visualizer = &visualizer
 			m.viewMode = ViewModeVisualize
-			m.statusMessage = fmt.Sprintf("Visualizing %s/%s", msg.Resource.Kind, msg.Resource.Name)
 		}
 		return m, nil
 
@@ -127,23 +114,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if strings.Contains(errStr, "validation failed:") {
 				title = "Validation Failed"
 				message = "The edited manifest failed Kubernetes validation.\n\n" +
-					"Please check that all required fields are present and valid.\n\n" +
-					"Your changes have been saved to /tmp for recovery."
+					"Please check that all required fields are present and valid."
 			} else if strings.Contains(errStr, "not found:") {
 				title = "Resource Not Found"
 				message = "The resource no longer exists on the cluster.\n\n" +
-					"It may have been deleted while you were editing.\n\n" +
-					"Your changes have been saved to /tmp for recovery."
+					"It may have been deleted while you were editing."
 			} else if strings.Contains(errStr, "cannot change resource") {
 				title = "Invalid Edit"
 				message = "Cannot change immutable fields (name, kind, or namespace).\n\n" +
-					"These fields are read-only after resource creation.\n\n" +
-					"Your changes have been saved to /tmp for recovery."
+					"These fields are read-only after resource creation."
 			} else if strings.Contains(errStr, "failed to parse edited YAML") {
 				title = "YAML Syntax Error"
 				message = "The edited YAML contains syntax errors.\n\n" +
-					"Please check your YAML formatting.\n\n" +
-					"Your changes have been saved to /tmp for recovery."
+					"Please check your YAML formatting."
 			} else if strings.Contains(errStr, "editor exited with error") {
 				title = "Editor Error"
 				message = "The editor exited with an error.\n\n" +
@@ -151,19 +134,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else if strings.Contains(errStr, "forbidden:") {
 				title = "Permission Denied"
 				message = "You don't have permission to update this resource.\n\n" +
-					"Check your RBAC permissions.\n\n" +
-					"Your changes have been saved to /tmp for recovery."
+					"Check your RBAC permissions."
 			} else {
 				title = "Edit Failed"
 				message = fmt.Sprintf("An error occurred while editing the resource:\n\n%s", errStr)
 			}
 
-			m.alertModal.ShowError(title, message)
-			m.statusMessage = "⚠ Edit failed - see modal for details"
+			m.modal.ShowError(title, message)
 		} else {
-			// Success case - show success modal briefly
-			m.alertModal.ShowSuccess("Edit Successful", "Resource has been updated on the cluster.")
-			m.statusMessage = "✓ Resource updated successfully"
+			// Success case - silent (like vim :wq)
 			// Trigger a resource refresh to show any updates
 			m.UpdateResources()
 			// If in manifest mode, refresh the manifest view with the updated resource
@@ -177,7 +156,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if key.Matches(msg, m.globalKeys.Help) {
-			m.showHelp = !m.showHelp
+			// Toggle help modal
+			if m.modal.IsVisible() && m.modal.modalType == ModalTypeHelp {
+				m.modal.Hide()
+			} else {
+				// Combine all key binding groups for help display
+				modeHelp := m.GetCurrentModeHelp()
+				allGroups := append(modeHelp.FullHelp(), m.globalKeys.FullHelp()...)
+				m.modal.ShowHelp(allGroups)
+			}
 			return m, nil
 		}
 
@@ -188,16 +175,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Modal gets priority for key handling
-		if m.alertModal.IsVisible() {
-			m.alertModal, cmd = m.alertModal.Update(msg)
+		if m.modal.IsVisible() {
+			m.modal, cmd = m.modal.Update(msg)
 			return m, cmd
 		}
 		return m.handleKeyPress(msg)
 
 	case tea.MouseMsg:
 		// Modal gets priority for mouse events too
-		if m.alertModal.IsVisible() {
-			m.alertModal, cmd = m.alertModal.Update(msg)
+		if m.modal.IsVisible() {
+			m.modal, cmd = m.modal.Update(msg)
 			return m, cmd
 		}
 		return m.handleMouseEvent(msg)
@@ -322,7 +309,6 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Edit resource with external editor
 	case key.Matches(msg, m.normalKeys.Edit):
-		m.statusMessage = "Opening editor..."
 		return m, m.EditSelectedResource()
 
 	// Visualize resource relationships
@@ -376,7 +362,6 @@ func (m Model) handleManifestModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.ExitManifestMode()
 
 	case key.Matches(msg, m.manifestKeys.Edit):
-		m.statusMessage = "Opening editor..."
 		return m, m.EditSelectedResource()
 
 	case key.Matches(msg, m.manifestKeys.Copy):

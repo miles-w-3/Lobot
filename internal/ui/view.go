@@ -12,19 +12,13 @@ import (
 func (m Model) View() string {
 	var baseView string
 
-	// Show splash screen if in splash mode
 	if m.viewMode == ViewModeSplash {
 		baseView = m.splash.View()
-	} else if m.err != nil {
-		baseView = statusErrorStyle.Render(fmt.Sprintf("Error: %v", m.err))
 	} else if m.viewMode == ViewModeManifest {
-		// Show manifest viewer if in manifest mode
 		baseView = m.renderManifestView()
 	} else if m.viewMode == ViewModeVisualize {
-		// Show visualizer if in visualize mode
 		baseView = m.renderVisualizeView()
 	} else {
-		// Normal view - full screen with proper layout
 		baseView = m.renderNormalView()
 	}
 
@@ -33,14 +27,9 @@ func (m Model) View() string {
 		return m.renderSelectorOverlay(baseView)
 	}
 
-	// If modal is visible, render it as an overlay on top of the base view
-	if m.alertModal.IsVisible() {
+	// If modal is visible (including help modal), render it as an overlay
+	if m.modal.IsVisible() {
 		return m.renderModalOverlay(baseView)
-	}
-
-	// If help is visible, render it as an overlay
-	if m.showHelp {
-		return m.renderHelpOverlay(baseView)
 	}
 
 	return baseView
@@ -221,24 +210,27 @@ func (m Model) renderStatusBar() string {
 
 // renderHelp renders the help text using the KeyMap system
 func (m Model) renderHelp() string {
+	// Use the modal's help model for rendering
+	helpModel := m.modal.helpModel
+
 	// Get the appropriate keymap for current mode
 	var helpView string
 
 	switch m.viewMode {
 	case ViewModeFilter:
-		helpView = m.help.ShortHelpView(m.filterKeys.ShortHelp())
+		helpView = helpModel.ShortHelpView(m.filterKeys.ShortHelp())
 	case ViewModeManifest:
 		// Combine mode-specific and global help
 		keys := append(m.manifestKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = m.help.ShortHelpView(keys)
+		helpView = helpModel.ShortHelpView(keys)
 	case ViewModeVisualize:
 		keys := append(m.visualizerKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = m.help.ShortHelpView(keys)
+		helpView = helpModel.ShortHelpView(keys)
 	case ViewModeNormal:
 		keys := append(m.normalKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = m.help.ShortHelpView(keys)
+		helpView = helpModel.ShortHelpView(keys)
 	default:
-		helpView = m.help.ShortHelpView(m.globalKeys.ShortHelp())
+		helpView = helpModel.ShortHelpView(m.globalKeys.ShortHelp())
 	}
 
 	return helpStyle.Render(helpView)
@@ -246,7 +238,7 @@ func (m Model) renderHelp() string {
 
 // renderModalOverlay renders the modal as an overlay on top of the base view
 func (m Model) renderModalOverlay(baseView string) string {
-	modalView := m.alertModal.View()
+	modalView := m.modal.View()
 
 	// Center and overlay the modal on the base view
 	return overlayCenter(baseView, modalView, m.width, m.height)
@@ -331,44 +323,6 @@ func (m Model) renderVisualizeView() string {
 	}
 
 	return m.visualizer.View()
-}
-
-// renderHelpOverlay renders the help menu as an overlay
-func (m Model) renderHelpOverlay(baseView string) string {
-	// Get mode-specific and global help
-	modeHelp := m.GetCurrentModeHelp()
-
-	// Combine all key binding groups
-	allGroups := append(modeHelp.FullHelp(), m.globalKeys.FullHelp()...)
-
-	// Render help menu
-	helpView := m.help.FullHelpView(allGroups)
-
-	// Create help box with title
-	helpTitle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(colorAccent).
-		Padding(0, 1).
-		Render("Help - Press ? to close")
-
-	helpContent := lipgloss.JoinVertical(
-		lipgloss.Left,
-		helpTitle,
-		"",
-		helpView,
-	)
-
-	// Style the help box
-	helpBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(colorAccent).
-		Padding(1, 2).
-		Width(min(80, m.width-4)).
-		MaxHeight(m.height - 4).
-		Render(helpContent)
-
-	// Center and overlay the help on the base view
-	return overlayCenter(baseView, helpBox, m.width, m.height)
 }
 
 // overlayCenter overlays content centered on a base view
