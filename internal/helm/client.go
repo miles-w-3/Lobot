@@ -68,9 +68,6 @@ func (c *simpleClientConfig) ClientConfig() (*rest.Config, error) {
 }
 
 func (c *simpleClientConfig) Namespace() (string, bool, error) {
-	if c.namespace == "" {
-		return "default", false, nil
-	}
 	return c.namespace, false, nil
 }
 
@@ -105,7 +102,7 @@ func NewClient(kubeConfig *rest.Config, namespace string, logger *slog.Logger) (
 	// We use "secret" as the storage driver (Helm's default in v3)
 	err := actionConfig.Init(
 		restGetter,
-		settings.Namespace(),
+		namespace,
 		"secret",
 		func(format string, v ...interface{}) {
 			logger.Debug(fmt.Sprintf(format, v...))
