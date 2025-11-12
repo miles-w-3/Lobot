@@ -217,6 +217,15 @@ func (m *Model) UpdateResources() {
 			{Title: "STATUS", Width: 15},
 			{Title: "VERSION", Width: 30},
 		}
+	} else if currentResourceType.DisplayName == "ArgoCD Applications" {
+		// Special columns for ArgoCD Applications: NAME, NAMESPACE, SYNC STATUS, HEALTH, SOURCE
+		columns = []table.Column{
+			{Title: "NAME", Width: 25},
+			{Title: "NAMESPACE", Width: 15},
+			{Title: "SYNC", Width: 12},
+			{Title: "HEALTH", Width: 12},
+			{Title: "SOURCE", Width: 35},
+		}
 	} else if currentResourceType.Namespaced {
 		columns = []table.Column{
 			{Title: "NAME", Width: 40},
@@ -244,6 +253,21 @@ func (m *Model) UpdateResources() {
 				truncate(resource.Namespace, 20),
 				resource.Status,
 				truncate(resource.HelmChart, 30),
+			})
+		} else if currentResourceType.DisplayName == "ArgoCD Applications" {
+			// Special row format for ArgoCD Applications
+			// Extract source repo display (show last part of URL)
+			sourceDisplay := resource.ArgoCDSourceRepo
+			if len(sourceDisplay) > 35 {
+				sourceDisplay = "..." + sourceDisplay[len(sourceDisplay)-32:]
+			}
+
+			rows = append(rows, table.Row{
+				truncate(resource.Name, 25),
+				truncate(resource.Namespace, 15),
+				truncate(resource.ArgoCDSyncStatus, 12),
+				truncate(resource.ArgoCDHealth, 12),
+				sourceDisplay,
 			})
 		} else if currentResourceType.Namespaced {
 			rows = append(rows, table.Row{
@@ -490,6 +514,20 @@ func (m *Model) CurrentResourceType() k8s.ResourceType {
 		return m.resourceTypes[m.currentType]
 	}
 	return k8s.PodResource
+}
+
+// RefreshCurrentResourceType triggers a refresh of the current resource type
+func (m *Model) RefreshCurrentResourceType() tea.Cmd {
+	currentType := m.CurrentResourceType()
+	return func() tea.Msg {
+		// Re-start the informer for the current resource type to trigger a refresh
+		// This will re-list all resources from the API server
+		err := m.resourceService.StartInformer(currentType)
+		if err != nil {
+			m.logger.Error("Failed to refresh resource type", "type", currentType.DisplayName, "error", err)
+		}
+		return nil
+	}
 }
 
 // NextResourceType moves to the next resource type

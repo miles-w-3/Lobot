@@ -201,10 +201,27 @@ func (m *VisualizerModel) renderDetailsPanel() string {
 		details.WriteString(fmt.Sprintf("Namespace: %s\n", res.Namespace))
 	}
 	details.WriteString(fmt.Sprintf("Status: %s\n", res.Status))
+
 	// Show revision for Helm releases
 	if res.IsHelmRelease && res.HelmRevision > 0 {
 		details.WriteString(fmt.Sprintf("Revision: %d\n", res.HelmRevision))
 	}
+
+	// Show ArgoCD-specific details
+	if res.IsArgoApplication {
+		details.WriteString(fmt.Sprintf("Sync Status: %s\n", res.ArgoCDSyncStatus))
+		details.WriteString(fmt.Sprintf("Health: %s\n", res.ArgoCDHealth))
+		if res.ArgoCDSourceRepo != "" {
+			details.WriteString(fmt.Sprintf("Repository: %s\n", res.ArgoCDSourceRepo))
+		}
+		if res.ArgoCDRevision != "" {
+			details.WriteString(fmt.Sprintf("Revision: %s\n", res.ArgoCDRevision))
+		}
+		if res.ArgoCDDestination != "" {
+			details.WriteString(fmt.Sprintf("Destination: %s\n", res.ArgoCDDestination))
+		}
+	}
+
 	details.WriteString(fmt.Sprintf("Age: %s\n", formatAge(res.Age)))
 
 	// Show owner references

@@ -320,6 +320,10 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	// Refresh resources
+	case key.Matches(msg, m.normalKeys.Refresh):
+		return m, m.RefreshCurrentResourceType()
+
 	// Quit
 	case key.Matches(msg, m.normalKeys.Quit):
 		return m, tea.Quit

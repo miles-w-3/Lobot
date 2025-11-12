@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/ansi"
@@ -126,18 +127,38 @@ func (m Model) renderStatusLine() string {
 		Foreground(colorPrimary).
 		Bold(true)
 
-	// Resource type badge on the right
+	// Resource type badge and metadata on the right
 	resourceBadgeStyle := lipgloss.NewStyle().
 		Foreground(colorSecondary).
 		Background(lipgloss.Color("#1a1a1a")).
 		Bold(true).
 		Padding(0, 1)
 
+	metadataStyle := lipgloss.NewStyle().
+		Foreground(colorMuted)
+
 	left := clusterStyle.Render(fmt.Sprintf("▶ %s", clusterName))
-	right := resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName))
+
+	// Build right side with resource type, update time, and refresh interval
+	rightParts := []string{
+		resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName)),
+	}
+
+	// Add last update time
+	lastUpdate := m.resourceService.GetLastUpdateTime(currentType.GVR)
+	if !lastUpdate.IsZero() {
+		rightParts = append(rightParts, metadataStyle.Render(fmt.Sprintf("updated %s", formatRelativeTime(lastUpdate))))
+	}
+
+	// Add refresh interval - all resources use the same 5-minute resync period
+	// All updates are event-driven via watch API; resync is just a safety net
+	refreshInterval := "resync: 5m"
+	rightParts = append(rightParts, metadataStyle.Render(refreshInterval))
+
+	right := strings.Join(rightParts, " • ")
 
 	// Calculate spacing to push right content to the right
-	spacing := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	spacing := m.width - lipgloss.Width(left) - ansi.PrintableRuneWidth(right) - 4
 	if spacing < 1 {
 		spacing = 1
 	}
@@ -420,4 +441,25 @@ func overlayLineAt(base, overlay string, x int) string {
 	}
 
 	return before.String() + overlay + after.String()
+}
+
+// formatRelativeTime formats a time as a relative duration (e.g., "2m ago", "30s ago")
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+
+	duration := time.Since(t)
+
+	if duration < time.Second {
+		return "just now"
+	} else if duration < time.Minute {
+		return fmt.Sprintf("%ds ago", int(duration.Seconds()))
+	} else if duration < time.Hour {
+		return fmt.Sprintf("%dm ago", int(duration.Minutes()))
+	} else if duration < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(duration.Hours()))
+	} else {
+		return fmt.Sprintf("%dd ago", int(duration.Hours()/24))
+	}
 }
