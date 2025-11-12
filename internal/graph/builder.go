@@ -44,7 +44,7 @@ func NewBuilder(provider ResourceProvider, logger *slog.Logger) *Builder {
 
 // BuildGraph builds a complete resource graph starting from a root resource
 // It traverses both up (to owners) and down (to owned resources)
-// Special handling for Helm releases: shows all resources in the release manifest
+// Special handling for Helm releases and ArgoCD Applications
 func (b *Builder) BuildGraph(rootResource *k8s.Resource) *ResourceGraph {
 	// Special case: Helm releases
 	if rootResource.IsHelmRelease {
@@ -52,6 +52,14 @@ func (b *Builder) BuildGraph(rootResource *k8s.Resource) *ResourceGraph {
 			"name", rootResource.Name,
 			"namespace", rootResource.Namespace)
 		return b.BuildHelmGraph(rootResource)
+	}
+
+	// Special case: ArgoCD Applications
+	if rootResource.IsArgoApplication {
+		b.logger.Debug("Building graph for ArgoCD Application",
+			"name", rootResource.Name,
+			"namespace", rootResource.Namespace)
+		return b.BuildArgoGraph(rootResource)
 	}
 
 	graph := NewResourceGraph(rootResource)

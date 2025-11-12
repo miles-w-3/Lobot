@@ -236,6 +236,11 @@ func (svc *ResourceService) StartInformer(resourceType ResourceType) error {
 	return svc.informer.StartInformer(svc.ctx, resourceType)
 }
 
+// GetLastUpdateTime returns the last time a resource type was updated
+func (svc *ResourceService) GetLastUpdateTime(gvr schema.GroupVersionResource) time.Time {
+	return svc.informer.GetLastUpdateTime(gvr)
+}
+
 // Close cleans up the service
 func (svc *ResourceService) Close() {
 	svc.mu.Lock()

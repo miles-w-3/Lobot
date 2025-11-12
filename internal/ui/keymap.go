@@ -55,6 +55,7 @@ type NormalModeKeyMap struct {
 	Edit      key.Binding
 	Visualize key.Binding
 	Filter    key.Binding
+	Refresh   key.Binding
 
 	// Selectors
 	NamespaceSelector    key.Binding
@@ -121,6 +122,10 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 			key.WithKeys("/"),
 			key.WithHelp("/", "filter by name"),
 		),
+		Refresh: key.NewBinding(
+			key.WithKeys("R"),
+			key.WithHelp("R", "refresh resources"),
+		),
 
 		// Selectors
 		NamespaceSelector: key.NewBinding(
@@ -154,7 +159,7 @@ func (k NormalModeKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Home, k.End},
 		{k.NextType, k.PrevType},
-		{k.Enter, k.Edit, k.Visualize, k.Filter},
+		{k.Enter, k.Edit, k.Visualize, k.Filter, k.Refresh},
 		{k.NamespaceSelector, k.ResourceTypeSelector, k.ContextSelector},
 		{k.Quit},
 	}
