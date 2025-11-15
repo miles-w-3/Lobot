@@ -1,0 +1,29 @@
+[tool.poetry]
+name = "led-matrix-ticker"
+version = "0.1.0"
+description = "Programmable LED matrix display for weather, sports, transit status, and more"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "src"}]
+
+[tool.poetry.dependencies]
+python = "^3.9"
+pillow = "^10.0"
+requests = "^2.31"
+
+[tool.poetry.group.emulator]
+optional = true
+
+[tool.poetry.group.emulator.dependencies]
+pygame = "^2.5"
+
+[tool.poetry.group.hardware]
+optional = true
+
+[tool.poetry.group.hardware.dependencies]
+# rpi-rgb-led-matrix requires manual installation on Raspberry Pi
+# Installation: curl https://raw.githubusercontent.com/hzeller/rpi-rgb-led-matrix/master/bindings/python/install.sh | bash
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
