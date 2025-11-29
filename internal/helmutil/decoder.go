@@ -43,9 +43,8 @@ type ChartMetadata struct {
 	Version string `json:"version"`
 }
 
-// DecodeHelmSecretTyped decodes a Helm release from a typed Kubernetes Secret
-// This version takes a typed corev1.Secret which has already base64-decoded Data field
-func DecodeHelmSecretTyped(secret *corev1.Secret, logger *slog.Logger) (*HelmRelease, error) {
+// DecodeHelmSecretTyped decodes Helm release from a typed Kubernetes Secret
+func DecodeHelmSecret(secret *corev1.Secret, logger *slog.Logger) (*HelmRelease, error) {
 	// Verify this is a Helm release secret
 	if secret.Type != "helm.sh/release.v1" {
 		return nil, fmt.Errorf("not a Helm release secret, type: %s", secret.Type)

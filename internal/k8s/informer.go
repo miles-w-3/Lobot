@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/bubbles/table"
 	"github.com/miles-w-3/lobot/internal/helmutil"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,157 +19,141 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// Resource represents a generic Kubernetes resource for display
-// Note: This also represents "pseudo-resources" like Helm releases
-type Resource struct {
-	Name       string
-	Namespace  string
-	Kind       string
-	APIVersion string
-	Status     string
-	Age        time.Duration
-	Labels     map[string]string
-	Raw        *unstructured.Unstructured
-	GVR        schema.GroupVersionResource // The GVR this resource came from
-
-	// Helm-specific fields (only populated for Helm releases)
-	HelmChart     string // Chart name and version (e.g., "nginx-1.2.3")
-	HelmRevision  int    // Helm release revision number
-	HelmManifest  string // The full manifest of deployed resources
-	IsHelmRelease bool   // True if this is a Helm release
-
-	// ArgoCD-specific fields (only populated for ArgoCD Applications)
-	ArgoCDSyncStatus  string // "Synced", "OutOfSync", etc
-	ArgoCDHealth      string // "Healthy", "Degraded", "Progressing", etc
-	ArgoCDSourceRepo  string // Git repo URL or Helm repo
-	ArgoCDRevision    string // Git commit SHA or Helm chart version
-	ArgoCDDestination string // Target cluster and namespace
-	IsArgoApplication bool   // True if this is an ArgoCD Application
-}
-
-// ResourceType represents a Kubernetes resource type
-type ResourceType struct {
-	GVR         schema.GroupVersionResource
-	DisplayName string
-	Namespaced  bool
-}
-
 // Common resource types
 var (
 	// Core resources
-	PodResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
-		DisplayName: "Pods",
-		Namespaced:  true,
-	}
-	ServiceResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"},
-		DisplayName: "Services",
-		Namespaced:  true,
-	}
-	ConfigMapResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"},
-		DisplayName: "ConfigMaps",
-		Namespaced:  true,
-	}
-	SecretResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"},
-		DisplayName: "Secrets",
-		Namespaced:  true,
-	}
-	PersistentVolumeClaimResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
-		DisplayName: "PersistentVolumeClaims",
-		Namespaced:  true,
-	}
-	ServiceAccountResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"},
-		DisplayName: "ServiceAccounts",
-		Namespaced:  true,
-	}
+	PodResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+		"Pods",
+		true,
+	)
+	ServiceResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "services"},
+		"Services",
+		true,
+	)
+	ConfigMapResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "configmaps"},
+		"ConfigMaps",
+		true,
+	)
+	SecretResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "secrets"},
+		"Secrets",
+		true,
+	)
+	PersistentVolumeClaimResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"},
+		"PersistentVolumeClaims",
+		true,
+	)
+	ServiceAccountResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"},
+		"ServiceAccounts",
+		true,
+	)
 
 	// Apps resources
-	DeploymentResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
-		DisplayName: "Deployments",
-		Namespaced:  true,
-	}
-	ReplicaSetResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"},
-		DisplayName: "ReplicaSets",
-		Namespaced:  true,
-	}
-	StatefulSetResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"},
-		DisplayName: "StatefulSets",
-		Namespaced:  true,
-	}
-	DaemonSetResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"},
-		DisplayName: "DaemonSets",
-		Namespaced:  true,
-	}
+	DeploymentResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"},
+		"Deployments",
+		true,
+	)
+	ReplicaSetResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "replicasets"},
+		"ReplicaSets",
+		true,
+	)
+	StatefulSetResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"},
+		"StatefulSets",
+		true,
+	)
+	DaemonSetResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"},
+		"DaemonSets",
+		true,
+	)
 
 	// Batch resources
-	JobResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"},
-		DisplayName: "Jobs",
-		Namespaced:  true,
-	}
-	CronJobResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"},
-		DisplayName: "CronJobs",
-		Namespaced:  true,
-	}
+	JobResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"},
+		"Jobs",
+		true,
+	)
+	CronJobResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"},
+		"CronJobs",
+		true,
+	)
 
 	// Networking resources
-	IngressResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
-		DisplayName: "Ingresses",
-		Namespaced:  true,
-	}
+	IngressResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "ingresses"},
+		"Ingresses",
+		true,
+	)
 
 	// Autoscaling resources
-	HorizontalPodAutoscalerResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
-		DisplayName: "HorizontalPodAutoscalers",
-		Namespaced:  true,
-	}
+	HorizontalPodAutoscalerResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"},
+		"HorizontalPodAutoscalers",
+		true,
+	)
 
 	// Cluster-scoped resources
-	NamespaceResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"},
-		DisplayName: "Namespaces",
-		Namespaced:  false,
-	}
-	NodeResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"},
-		DisplayName: "Nodes",
-		Namespaced:  false,
-	}
-	PersistentVolumeResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"},
-		DisplayName: "PersistentVolumes",
-		Namespaced:  false,
-	}
+	NamespaceResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"},
+		"Namespaces",
+		false,
+	)
+	NodeResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "nodes"},
+		"Nodes",
+		false,
+	)
+	PersistentVolumeResource = NewTrackedType(
+		schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumes"},
+		"PersistentVolumes",
+		false,
+	)
 
 	// Special resource types
 	// Helm releases use a pseudo-GVR to avoid conflicting with actual secrets
-	HelmReleaseResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "helm.sh", Version: "v3", Resource: "releases"},
-		DisplayName: "Helm Releases",
-		Namespaced:  true,
-	}
-	ApplicationResource = ResourceType{
-		GVR:         schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"},
-		DisplayName: "ArgoCD Applications",
-		Namespaced:  true,
-	}
+	HelmReleaseResource = NewCustomTrackedType(
+		schema.GroupVersionResource{Group: "helm.sh", Version: "v3", Resource: "releases"},
+		"Helm Releases",
+		true,
+		TableParams{
+			columnOverride: []table.Column{
+				{Title: "NAME", Width: 30},
+				{Title: "NAMESPACE", Width: 20},
+				{Title: "STATUS", Width: 15},
+				{Title: "VERSION", Width: 30},
+			},
+			rowBinder: nil, // Use default (DefaultRowBinding on HelmRelease)
+		},
+	)
+	ApplicationResource = NewCustomTrackedType(
+		schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"},
+		"ArgoCD Applications",
+		true,
+		TableParams{
+			columnOverride: []table.Column{
+				{Title: "NAME", Width: 25},
+				{Title: "NAMESPACE", Width: 15},
+				{Title: "SYNC", Width: 12},
+				{Title: "HEALTH", Width: 12},
+				{Title: "SOURCE", Width: 35},
+			},
+			rowBinder: nil, // Use default (DefaultRowBinding on ArgoCDApp)
+		},
+	)
 )
 
 // DefaultResourceTypes returns a list of commonly used resource types
-func DefaultResourceTypes() []ResourceType {
-	return []ResourceType{
+func DefaultResourceTypes() []*TrackedType {
+	return []*TrackedType{
 		// Special resource types
 		HelmReleaseResource,
 		ApplicationResource,
@@ -210,18 +195,18 @@ func DefaultResourceTypes() []ResourceType {
 
 // InformerManager manages dynamic informers for any resource type
 type InformerManager struct {
-	client          *Client
-	logger          *slog.Logger
-	dynamicClient   dynamic.Interface
-	factory         dynamicinformer.DynamicSharedInformerFactory
-	stopCh          chan struct{}
-	mu              sync.RWMutex
-	resources       map[schema.GroupVersionResource][]Resource
+	client             *Client
+	logger             *slog.Logger
+	dynamicClient      dynamic.Interface
+	factory            dynamicinformer.DynamicSharedInformerFactory
+	stopCh             chan struct{}
+	mu                 sync.RWMutex
+	resources          map[schema.GroupVersionResource][]TrackedObject
 	activeInformers    map[schema.GroupVersionResource]cache.SharedIndexInformer
 	updateCallback     UpdateCallback
-	ownerIndex         map[string][]Resource // Maps owner UID to owned resources
-	helmResources      []Resource            // Cached Helm releases (decoded from secrets)
-	helmPollingStarted bool                  // Tracks if Helm polling goroutine has been started
+	ownerIndex         map[string][]TrackedObject // Maps owner UID to owned resources
+	helmResources      []TrackedObject            // Cached Helm releases (decoded from secrets)
+	helmPollingStarted bool                       // Tracks if Helm polling goroutine has been started
 	isInitialized      bool
 	lastUpdateTime     map[schema.GroupVersionResource]time.Time // Tracks when each resource type was last updated
 }
@@ -245,10 +230,10 @@ func NewInformerManager(client *Client, logger *slog.Logger, updateCallback Upda
 		dynamicClient:   dynamicClient,
 		factory:         factory,
 		stopCh:          make(chan struct{}),
-		resources:       make(map[schema.GroupVersionResource][]Resource),
+		resources:       make(map[schema.GroupVersionResource][]TrackedObject),
 		activeInformers: make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
-		ownerIndex:      make(map[string][]Resource),
-		helmResources:   []Resource{},
+		ownerIndex:      make(map[string][]TrackedObject),
+		helmResources:   []TrackedObject{},
 		updateCallback:  updateCallback,
 		isInitialized:   false,
 		lastUpdateTime:  make(map[schema.GroupVersionResource]time.Time),
@@ -258,7 +243,7 @@ func NewInformerManager(client *Client, logger *slog.Logger, updateCallback Upda
 // SetUpdateCallback sets a callback function that gets called when resources are updated
 
 // StartInformer starts an informer for a specific resource type
-func (im *InformerManager) StartInformer(ctx context.Context, resourceType ResourceType) error {
+func (im *InformerManager) StartInformer(ctx context.Context, resourceType *TrackedType) error {
 	// Special handling for Helm releases - they use a polling mechanism instead of informers
 	if resourceType.DisplayName == "Helm Releases" {
 		return im.startHelmReleasePolling(ctx)
@@ -358,11 +343,11 @@ func (im *InformerManager) checkResourceExists(gvr schema.GroupVersionResource) 
 	if err != nil {
 		// Check if it's a "not found" error (CRD doesn't exist)
 		if apierrors.IsNotFound(err) ||
-		   (err.Error() != "" && (
-			   // Check for common "resource not found" error messages
-			   // Different k8s versions may return different error types
-			   err.Error() == "the server could not find the requested resource" ||
-			   err.Error() == "the server doesn't have a resource type \"applications\"")) {
+			(err.Error() != "" && (
+			// Check for common "resource not found" error messages
+			// Different k8s versions may return different error types
+			err.Error() == "the server could not find the requested resource" ||
+				err.Error() == "the server doesn't have a resource type \"applications\"")) {
 			return false, nil // CRD doesn't exist, not an error
 		}
 		// Some other error occurred
@@ -408,22 +393,22 @@ func (im *InformerManager) handleResourceUpdate(gvr schema.GroupVersionResource)
 	}
 
 	// Get all objects from the cache
-	var resources []Resource
+	var resources []TrackedObject
 	store := informer.GetStore()
 
 	for _, obj := range store.List() {
 		if unstructuredObj, ok := obj.(*unstructured.Unstructured); ok {
-			resources = append(resources, convertUnstructuredToResource(unstructuredObj, gvr))
+			resources = append(resources, ConvertUnstructuredToTrackedObject(unstructuredObj, gvr))
 		}
 	}
 
 	// Sort resources by namespace and name for consistent ordering
 	// This prevents resources from jumping around in the UI on refresh
 	sort.Slice(resources, func(i, j int) bool {
-		if resources[i].Namespace != resources[j].Namespace {
-			return resources[i].Namespace < resources[j].Namespace
+		if resources[i].GetNamespace() != resources[j].GetNamespace() {
+			return resources[i].GetNamespace() < resources[j].GetNamespace()
 		}
-		return resources[i].Name < resources[j].Name
+		return resources[i].GetName() < resources[j].GetName()
 	})
 
 	// Get old resources to determine what changed
@@ -455,17 +440,17 @@ func (im *InformerManager) forceRefreshFromAPI(ctx context.Context, gvr schema.G
 	}
 
 	// Convert to our Resource type
-	var resources []Resource
+	var resources []TrackedObject
 	for _, item := range list.Items {
-		resources = append(resources, convertUnstructuredToResource(&item, gvr))
+		resources = append(resources, ConvertUnstructuredToTrackedObject(&item, gvr))
 	}
 
 	// Sort resources by namespace and name for consistent ordering
 	sort.Slice(resources, func(i, j int) bool {
-		if resources[i].Namespace != resources[j].Namespace {
-			return resources[i].Namespace < resources[j].Namespace
+		if resources[i].GetNamespace() != resources[j].GetNamespace() {
+			return resources[i].GetNamespace() < resources[j].GetNamespace()
 		}
-		return resources[i].Name < resources[j].Name
+		return resources[i].GetName() < resources[j].GetName()
 	})
 
 	// Update the cache
@@ -484,19 +469,19 @@ func (im *InformerManager) forceRefreshFromAPI(ctx context.Context, gvr schema.G
 }
 
 // GetResources returns the cached resources for a specific type
-func (im *InformerManager) GetResources(gvr schema.GroupVersionResource) []Resource {
+func (im *InformerManager) GetResources(gvr schema.GroupVersionResource) []TrackedObject {
 	im.mu.RLock()
 	defer im.mu.RUnlock()
 
-	// Special handling for Helm releases
+	// Special case: Helm releases are stored separately
 	if gvr == HelmReleaseResource.GVR {
-		result := make([]Resource, len(im.helmResources))
+		result := make([]TrackedObject, len(im.helmResources))
 		copy(result, im.helmResources)
 		return result
 	}
 
 	resources := im.resources[gvr]
-	result := make([]Resource, len(resources))
+	result := make([]TrackedObject, len(resources))
 	copy(result, resources)
 	return result
 }
@@ -506,11 +491,11 @@ func (im *InformerManager) Stop() {
 	close(im.stopCh)
 }
 
-// convertUnstructuredToResource converts an unstructured object to our Resource type
-func convertUnstructuredToResource(obj *unstructured.Unstructured, gvr schema.GroupVersionResource) Resource {
+// ConvertUnstructuredToTrackedObject converts an unstructured object to a TrackedObject
+func ConvertUnstructuredToTrackedObject(obj *unstructured.Unstructured, gvr schema.GroupVersionResource) TrackedObject {
 	// Special handling for ArgoCD Applications
 	if gvr.Group == "argoproj.io" && gvr.Resource == "applications" {
-		return convertArgoApplicationToResource(obj, gvr)
+		return convertArgoApplicationToTrackedObject(obj, gvr)
 	}
 
 	// Extract status if available
@@ -529,16 +514,18 @@ func convertUnstructuredToResource(obj *unstructured.Unstructured, gvr schema.Gr
 		}
 	}
 
-	return Resource{
-		Name:       obj.GetName(),
-		Namespace:  obj.GetNamespace(),
-		Kind:       obj.GetKind(),
+	return &K8sResource{
+		CoreFields: CoreFields{
+			Name:      obj.GetName(),
+			Namespace: obj.GetNamespace(),
+			Status:    status,
+			Age:       time.Since(obj.GetCreationTimestamp().Time),
+			Raw:       obj,
+		},
 		APIVersion: obj.GetAPIVersion(),
-		Status:     status,
-		Age:        time.Since(obj.GetCreationTimestamp().Time),
+		Kind:       obj.GetKind(),
 		Labels:     obj.GetLabels(),
-		Raw:        obj,
-		GVR:        gvr, // Include the GVR this resource came from
+		GVR:        gvr,
 	}
 }
 
@@ -547,7 +534,7 @@ func (im *InformerManager) GetNamespaces() []string {
 	resources := im.GetResources(NamespaceResource.GVR)
 	namespaces := make([]string, len(resources))
 	for i, ns := range resources {
-		namespaces[i] = ns.Name
+		namespaces[i] = ns.GetName()
 	}
 	return namespaces
 }
@@ -557,14 +544,15 @@ func (im *InformerManager) GetNamespaces() []string {
 // Only used during initialization - prefer updateOwnerIndexForGVR for incremental updates
 func (im *InformerManager) rebuildOwnerIndex() {
 	// Clear existing index
-	im.ownerIndex = make(map[string][]Resource)
+	im.ownerIndex = make(map[string][]TrackedObject)
 
 	// Iterate through all cached resources across all GVRs
 	for _, resources := range im.resources {
 		for _, resource := range resources {
 			// Check if this resource has owner references
-			if resource.Raw != nil {
-				owners := resource.Raw.GetOwnerReferences()
+			raw := resource.GetRaw()
+			if raw != nil {
+				owners := raw.GetOwnerReferences()
 				for _, owner := range owners {
 					ownerUID := string(owner.UID)
 					im.ownerIndex[ownerUID] = append(im.ownerIndex[ownerUID], resource)
@@ -577,20 +565,22 @@ func (im *InformerManager) rebuildOwnerIndex() {
 // updateOwnerIndexForGVR incrementally updates the owner index for a specific GVR
 // This is much more efficient than rebuilding the entire index
 // Must be called with im.mu locked
-func (im *InformerManager) updateOwnerIndexForGVR(gvr schema.GroupVersionResource, oldResources, newResources []Resource) {
+func (im *InformerManager) updateOwnerIndexForGVR(gvr schema.GroupVersionResource, oldResources, newResources []TrackedObject) {
 	// Create maps for quick lookup
-	oldMap := make(map[string]Resource)
+	oldMap := make(map[string]TrackedObject)
 	for _, res := range oldResources {
-		if res.Raw != nil {
-			key := string(res.Raw.GetUID())
+		raw := res.GetRaw()
+		if raw != nil {
+			key := string(raw.GetUID())
 			oldMap[key] = res
 		}
 	}
 
-	newMap := make(map[string]Resource)
+	newMap := make(map[string]TrackedObject)
 	for _, res := range newResources {
-		if res.Raw != nil {
-			key := string(res.Raw.GetUID())
+		raw := res.GetRaw()
+		if raw != nil {
+			key := string(raw.GetUID())
 			newMap[key] = res
 		}
 	}
@@ -599,7 +589,7 @@ func (im *InformerManager) updateOwnerIndexForGVR(gvr schema.GroupVersionResourc
 	for uid, oldRes := range oldMap {
 		if _, exists := newMap[uid]; !exists {
 			// Resource was deleted - remove it from owner index
-			im.removeResourceFromOwnerIndex(&oldRes)
+			im.removeResourceFromOwnerIndex(oldRes)
 		}
 	}
 
@@ -607,50 +597,55 @@ func (im *InformerManager) updateOwnerIndexForGVR(gvr schema.GroupVersionResourc
 	for uid, newRes := range newMap {
 		if oldRes, exists := oldMap[uid]; exists {
 			// Resource exists - check if owner references changed
-			if !ownerReferencesEqual(oldRes.Raw, newRes.Raw) {
+			oldRaw := oldRes.GetRaw()
+			newRaw := newRes.GetRaw()
+			if !ownerReferencesEqual(oldRaw, newRaw) {
 				// Owner references changed - remove old, add new
-				im.removeResourceFromOwnerIndex(&oldRes)
-				im.addResourceToOwnerIndex(&newRes)
+				im.removeResourceFromOwnerIndex(oldRes)
+				im.addResourceToOwnerIndex(newRes)
 			}
 			// Otherwise, owner references unchanged - no index update needed
 		} else {
 			// New resource - add to index
-			im.addResourceToOwnerIndex(&newRes)
+			im.addResourceToOwnerIndex(newRes)
 		}
 	}
 }
 
 // addResourceToOwnerIndex adds a resource's owner references to the index
 // Must be called with im.mu locked
-func (im *InformerManager) addResourceToOwnerIndex(resource *Resource) {
-	if resource.Raw == nil {
+func (im *InformerManager) addResourceToOwnerIndex(resource TrackedObject) {
+	raw := resource.GetRaw()
+	if raw == nil {
 		return
 	}
 
-	owners := resource.Raw.GetOwnerReferences()
+	owners := raw.GetOwnerReferences()
 	for _, owner := range owners {
 		ownerUID := string(owner.UID)
-		im.ownerIndex[ownerUID] = append(im.ownerIndex[ownerUID], *resource)
+		im.ownerIndex[ownerUID] = append(im.ownerIndex[ownerUID], resource)
 	}
 }
 
 // removeResourceFromOwnerIndex removes a resource from the owner index
 // Must be called with im.mu locked
-func (im *InformerManager) removeResourceFromOwnerIndex(resource *Resource) {
-	if resource.Raw == nil {
+func (im *InformerManager) removeResourceFromOwnerIndex(resource TrackedObject) {
+	raw := resource.GetRaw()
+	if raw == nil {
 		return
 	}
 
-	resourceUID := string(resource.Raw.GetUID())
-	owners := resource.Raw.GetOwnerReferences()
+	resourceUID := string(raw.GetUID())
+	owners := raw.GetOwnerReferences()
 
 	for _, owner := range owners {
 		ownerUID := string(owner.UID)
 		// Remove this resource from the owner's owned list
 		owned := im.ownerIndex[ownerUID]
-		filtered := make([]Resource, 0, len(owned))
+		filtered := make([]TrackedObject, 0, len(owned))
 		for _, r := range owned {
-			if r.Raw != nil && string(r.Raw.GetUID()) != resourceUID {
+			rRaw := r.GetRaw()
+			if rRaw != nil && string(rRaw.GetUID()) != resourceUID {
 				filtered = append(filtered, r)
 			}
 		}
@@ -693,13 +688,13 @@ func ownerReferencesEqual(a, b *unstructured.Unstructured) bool {
 }
 
 // GetResourcesByOwnerUID returns all resources owned by a specific UID
-func (im *InformerManager) GetResourcesByOwnerUID(ownerUID string) []Resource {
+func (im *InformerManager) GetResourcesByOwnerUID(ownerUID string) []TrackedObject {
 	im.mu.RLock()
 	defer im.mu.RUnlock()
 
 	// Return a copy to avoid concurrent modification issues
 	owned := im.ownerIndex[ownerUID]
-	result := make([]Resource, len(owned))
+	result := make([]TrackedObject, len(owned))
 	copy(result, owned)
 	return result
 }
@@ -719,7 +714,7 @@ func (im *InformerManager) GetDynamicClient() dynamic.Interface {
 
 // FetchResource fetches a resource using the dynamic client
 // This is used for resources not in the cache (e.g., owner references to resources we're not watching)
-func (im *InformerManager) FetchResource(ctx context.Context, gvr schema.GroupVersionResource, name, namespace string, expectedUID string) *Resource {
+func (im *InformerManager) FetchResource(ctx context.Context, gvr schema.GroupVersionResource, name, namespace string, expectedUID string) TrackedObject {
 	var obj *unstructured.Unstructured
 	var err error
 
@@ -745,9 +740,8 @@ func (im *InformerManager) FetchResource(ctx context.Context, gvr schema.GroupVe
 		return nil
 	}
 
-	// Convert to our Resource type
-	resource := convertUnstructuredToResource(obj, gvr)
-	return &resource
+	resource := ConvertUnstructuredToTrackedObject(obj, gvr)
+	return resource
 }
 
 // startHelmReleasePolling starts a background goroutine that polls for Helm releases
@@ -804,45 +798,50 @@ func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp
 
 	im.logger.Debug("Refreshing Helm releases", "totalSecrets", len(secrets))
 
-	helmResources := []Resource{}
+	helmResources := []TrackedObject{}
 	helmSecretCount := 0
 
 	// Decode each Helm release secret
 	for _, secret := range secrets {
 		// Check if this is a Helm release secret
-		secretType, found, _ := unstructured.NestedString(secret.Raw.Object, "type")
+		raw := secret.GetRaw()
+		if raw == nil {
+			continue
+		}
+
+		secretType, found, _ := unstructured.NestedString(raw.Object, "type")
 		if !found || secretType != "helm.sh/release.v1" {
 			continue
 		}
 
 		helmSecretCount++
 		im.logger.Debug("Found Helm release secret",
-			"name", secret.Name,
-			"namespace", secret.Namespace)
+			"name", secret.GetName(),
+			"namespace", secret.GetNamespace())
 
-		// Fetch the typed Secret to get auto-decoded data
+		// fetch release secret data
 		ctx := context.Background()
-		typedSecret, err := im.client.Clientset.CoreV1().Secrets(secret.Namespace).Get(ctx, secret.Name, metav1.GetOptions{})
+		typedSecret, err := im.client.Clientset.CoreV1().Secrets(secret.GetNamespace()).Get(ctx, secret.GetName(), metav1.GetOptions{})
 		if err != nil {
 			im.logger.Warn("Failed to fetch typed Secret",
-				"name", secret.Name,
-				"namespace", secret.Namespace,
+				"name", secret.GetName(),
+				"namespace", secret.GetNamespace(),
 				"error", err)
 			continue
 		}
 
 		// Decode the Helm release from the typed Secret
-		release, err := helmutil.DecodeHelmSecretTyped(typedSecret, im.logger)
+		release, err := helmutil.DecodeHelmSecret(typedSecret, im.logger)
 		if err != nil {
 			im.logger.Warn("Failed to decode Helm secret",
-				"name", secret.Name,
-				"namespace", secret.Namespace,
+				"name", secret.GetName(),
+				"namespace", secret.GetNamespace(),
 				"error", err)
 			continue
 		}
 
 		// Convert to our Resource type
-		helmResource := convertHelmReleaseToResource(release)
+		helmResource := convertHelmReleaseToTrackedObject(release)
 		helmResources = append(helmResources, helmResource)
 	}
 

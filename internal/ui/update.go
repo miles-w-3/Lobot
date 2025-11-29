@@ -322,7 +322,7 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Refresh resources
 	case key.Matches(msg, m.normalKeys.Refresh):
-		return m, m.RefreshCurrentResourceType()
+		return m, m.startInformerWithSplash(m.CurrentResourceType())
 
 	// Quit
 	case key.Matches(msg, m.normalKeys.Quit):

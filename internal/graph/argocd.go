@@ -6,32 +6,32 @@ import (
 
 // BuildArgoGraph builds a graph for an ArgoCD Application showing all managed resources
 // Uses label-based discovery for first level, then owner references for deeper levels
-func (b *Builder) BuildArgoGraph(app *k8s.Resource) *ResourceGraph {
+func (b *Builder) BuildArgoGraph(app k8s.TrackedObject) *ResourceGraph {
 	graph := NewResourceGraph(app)
 
 	b.logger.Debug("Building ArgoCD Application graph",
-		"name", app.Name,
-		"namespace", app.Namespace)
+		"name", app.GetName(),
+		"namespace", app.GetNamespace())
 
 	// Get all resources across all GVRs
 	allResources := b.getAllCachedResources()
 
 	// Filter resources by ArgoCD instance label (first level)
-	managedResources := b.filterByArgoLabel(allResources, app.Name)
+	managedResources := b.filterByArgoLabel(allResources, app.GetName())
 
 	b.logger.Debug("Found ArgoCD managed resources",
-		"application", app.Name,
+		"application", app.GetName(),
 		"count", len(managedResources))
 
 	// For each managed resource, add it to the graph and traverse its ownership chain
 	visited := make(map[string]bool)
-	visited[string(app.Raw.GetUID())] = true
+	visited[string(app.GetRaw().GetUID())] = true
 
 	for i := range managedResources {
-		resource := &managedResources[i]
+		resource := managedResources[i]
 
 		// Skip if already visited (shouldn't happen at this level)
-		if visited[string(resource.Raw.GetUID())] {
+		if visited[string(resource.GetRaw().GetUID())] {
 			continue
 		}
 
@@ -51,8 +51,8 @@ func (b *Builder) BuildArgoGraph(app *k8s.Resource) *ResourceGraph {
 }
 
 // getAllCachedResources gets all resources from all GVRs in the cache
-func (b *Builder) getAllCachedResources() []k8s.Resource {
-	var allResources []k8s.Resource
+func (b *Builder) getAllCachedResources() []k8s.TrackedObject {
+	var allResources []k8s.TrackedObject
 
 	// Get resources for all common resource types
 	// We need to check all GVRs since ArgoCD can manage any resource type
@@ -73,25 +73,30 @@ func (b *Builder) getAllCachedResources() []k8s.Resource {
 
 // filterByArgoLabel filters resources by the ArgoCD instance label
 // Returns resources with label: argocd.argoproj.io/instance=<applicationName>
-func (b *Builder) filterByArgoLabel(resources []k8s.Resource, applicationName string) []k8s.Resource {
-	var filtered []k8s.Resource
+func (b *Builder) filterByArgoLabel(resources []k8s.TrackedObject, applicationName string) []k8s.TrackedObject {
+	var filtered []k8s.TrackedObject
 
 	for i := range resources {
-		resource := &resources[i]
+		resource := resources[i]
 
-		// Check if resource has ArgoCD instance label
-		if resource.Labels == nil {
+		raw := resource.GetRaw()
+		if raw == nil {
+			continue
+		}
+		
+		labels := raw.GetLabels()
+		if labels == nil {
 			continue
 		}
 
-		instanceLabel, exists := resource.Labels["argocd.argoproj.io/instance"]
+		instanceLabel, exists := labels["argocd.argoproj.io/instance"]
 		if !exists {
 			continue
 		}
 
 		// Check if the label matches the Application name
 		if instanceLabel == applicationName {
-			filtered = append(filtered, *resource)
+			filtered = append(filtered, resource)
 		}
 	}
 

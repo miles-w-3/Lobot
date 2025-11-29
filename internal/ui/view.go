@@ -95,7 +95,7 @@ func (m Model) renderManifestView() string {
 	}
 
 	// Title
-	title := titleStyle.Render(fmt.Sprintf("Manifest: %s/%s", resource.Kind, resource.Name))
+	title := titleStyle.Render(fmt.Sprintf("Manifest: %s/%s", resource.GetKind(), resource.GetName()))
 
 	// Manifest content in bordered viewport
 	viewportContent := m.manifestViewport.View()

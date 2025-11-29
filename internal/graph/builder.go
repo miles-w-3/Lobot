@@ -16,9 +16,9 @@ const (
 // ResourceProvider defines the interface for accessing Kubernetes resources
 // This abstraction allows the graph builder to work with any service that can provide resources
 type ResourceProvider interface {
-	GetResources(gvr schema.GroupVersionResource) []k8s.Resource
-	GetResourcesByOwnerUID(uid string) []k8s.Resource
-	FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) *k8s.Resource
+	GetResources(gvr schema.GroupVersionResource) []k8s.TrackedObject
+	GetResourcesByOwnerUID(uid string) []k8s.TrackedObject
+	FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) k8s.TrackedObject
 	DiscoverResourceName(gv schema.GroupVersion, kind string) (string, error)
 }
 
@@ -45,20 +45,21 @@ func NewBuilder(provider ResourceProvider, logger *slog.Logger) *Builder {
 // BuildGraph builds a complete resource graph starting from a root resource
 // It traverses both up (to owners) and down (to owned resources)
 // Special handling for Helm releases and ArgoCD Applications
-func (b *Builder) BuildGraph(rootResource *k8s.Resource) *ResourceGraph {
+func (b *Builder) BuildGraph(rootResource k8s.TrackedObject) *ResourceGraph {
+	resourceCategory := rootResource.GetCategory()
 	// Special case: Helm releases
-	if rootResource.IsHelmRelease {
+	if resourceCategory == k8s.ObjectCategoryHelm {
 		b.logger.Debug("Building graph for Helm release",
-			"name", rootResource.Name,
-			"namespace", rootResource.Namespace)
+			"name", rootResource.GetName(),
+			"namespace", rootResource.GetNamespace())
 		return b.BuildHelmGraph(rootResource)
 	}
 
 	// Special case: ArgoCD Applications
-	if rootResource.IsArgoApplication {
+	if resourceCategory == k8s.ObjectCategoryArgoCD {
 		b.logger.Debug("Building graph for ArgoCD Application",
-			"name", rootResource.Name,
-			"namespace", rootResource.Namespace)
+			"name", rootResource.GetName(),
+			"namespace", rootResource.GetNamespace())
 		return b.BuildArgoGraph(rootResource)
 	}
 
@@ -66,9 +67,8 @@ func (b *Builder) BuildGraph(rootResource *k8s.Resource) *ResourceGraph {
 	visited := make(map[string]bool)
 
 	b.logger.Debug("Building graph for resource",
-		"name", rootResource.Name,
-		"namespace", rootResource.Namespace,
-		"kind", rootResource.Kind)
+		"name", rootResource.GetName(),
+		"namespace", rootResource.GetNamespace())
 
 	// Traverse upwards to find owners
 	b.traverseOwners(graph, graph.Root, visited, 0)
@@ -101,11 +101,11 @@ func (b *Builder) traverseOwners(graph *ResourceGraph, node *Node, visited map[s
 	visited[key] = true
 
 	// Get owner references from the resource
-	if node.Resource.Raw == nil {
+	if node.Resource.GetRaw() == nil {
 		return
 	}
 
-	owners := node.Resource.Raw.GetOwnerReferences()
+	owners := node.Resource.GetRaw().GetOwnerReferences()
 
 	for _, ownerRef := range owners {
 		// Try to find the owner resource
@@ -114,7 +114,7 @@ func (b *Builder) traverseOwners(graph *ResourceGraph, node *Node, visited map[s
 			b.logger.Debug("Owner resource not found",
 				"owner", ownerRef.Name,
 				"kind", ownerRef.Kind,
-				"namespace", node.Resource.Namespace)
+				"namespace", node.Resource.GetNamespace())
 			continue
 		}
 
@@ -143,16 +143,16 @@ func (b *Builder) traverseOwned(graph *ResourceGraph, node *Node, visited map[st
 	}
 	visited[key] = true
 
-	if node.Resource.Raw == nil {
+	if node.Resource.GetRaw() == nil {
 		return
 	}
 
 	// Use the owner UID index for fast lookup
-	ownerUID := string(node.Resource.Raw.GetUID())
+	ownerUID := string(node.Resource.GetRaw().GetUID())
 	ownedResources := b.provider.GetResourcesByOwnerUID(ownerUID)
 
 	for i := range ownedResources {
-		owned := &ownedResources[i]
+		owned := ownedResources[i]
 
 		// Add owned node to graph
 		ownedNode := graph.AddNode(owned, RelationshipOwner)
@@ -166,7 +166,7 @@ func (b *Builder) traverseOwned(graph *ResourceGraph, node *Node, visited map[st
 }
 
 // findOwnerResource finds an owner resource using the ownerReference metadata
-func (b *Builder) findOwnerResource(childResource *k8s.Resource, ownerRef metav1.OwnerReference) *k8s.Resource {
+func (b *Builder) findOwnerResource(childResource k8s.TrackedObject, ownerRef metav1.OwnerReference) k8s.TrackedObject {
 	// Convert ownerRef (apiVersion + kind) to GVR
 	gvr, err := b.ownerRefToGVR(ownerRef)
 	if err != nil {
@@ -180,10 +180,10 @@ func (b *Builder) findOwnerResource(childResource *k8s.Resource, ownerRef metav1
 	// First, try to find in cached resources (fast path)
 	cachedResources := b.provider.GetResources(gvr)
 	for i := range cachedResources {
-		res := &cachedResources[i]
-		if res.Name == ownerRef.Name &&
-			(res.Namespace == childResource.Namespace || res.Namespace == "") &&
-			string(res.Raw.GetUID()) == string(ownerRef.UID) {
+		res := cachedResources[i]
+		if res.GetName() == ownerRef.Name &&
+			(res.GetNamespace() == childResource.GetNamespace() || res.GetNamespace() == "") &&
+			string(res.GetRaw().GetUID()) == string(ownerRef.UID) {
 			return res
 		}
 	}
@@ -192,9 +192,8 @@ func (b *Builder) findOwnerResource(childResource *k8s.Resource, ownerRef metav1
 	b.logger.Debug("Owner not in cache, fetching via API",
 		"owner", ownerRef.Name,
 		"kind", ownerRef.Kind,
-		"namespace", childResource.Namespace)
-
-	return b.provider.FetchResource(gvr, ownerRef.Name, childResource.Namespace, string(ownerRef.UID))
+		"namespace", childResource.GetNamespace())
+	return b.provider.FetchResource(gvr, ownerRef.Name, childResource.GetNamespace(), string(ownerRef.UID))
 }
 
 // ownerRefToGVR converts an ownerReference to a GroupVersionResource

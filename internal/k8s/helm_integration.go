@@ -7,8 +7,8 @@ import (
 	"github.com/miles-w-3/lobot/internal/helmutil"
 )
 
-// convertHelmReleaseToResource converts a decoded Helm release to a k8s.Resource for display
-func convertHelmReleaseToResource(rel *helmutil.HelmRelease) Resource {
+// convertHelmReleaseToTrackedObject converts a decoded Helm release to a TrackedObject
+func convertHelmReleaseToTrackedObject(rel *helmutil.HelmRelease) TrackedObject {
 	// Format chart name and version
 	chartName := "unknown"
 	if rel.Chart.Metadata.Name != "" {
@@ -21,40 +21,42 @@ func convertHelmReleaseToResource(rel *helmutil.HelmRelease) Resource {
 		age = time.Since(rel.Info.FirstDeployed)
 	}
 
-	return Resource{
-		Name:          rel.Name,
-		Namespace:     rel.Namespace,
-		Kind:          "HelmRelease",
-		APIVersion:    "helm.sh/v3",
-		Status:        rel.Info.Status,
-		Age:           age,
-		Labels:        nil, // Helm releases don't have labels in the traditional sense
-		Raw:           nil, // We don't have an unstructured.Unstructured for Helm releases
-		GVR:           HelmReleaseResource.GVR,
-		HelmChart:     chartName,
-		HelmRevision:  rel.Version,
-		HelmManifest:  rel.Manifest,
-		IsHelmRelease: true,
+	return &HelmRelease{
+		CoreFields: CoreFields{
+			Name:      rel.Name,
+			Namespace: rel.Namespace,
+			Status:    rel.Info.Status,
+			Age:       age,
+			Raw:       nil, // Helm releases don't have a k8s object
+		},
+		HelmChart:    chartName,
+		HelmRevision: rel.Version,
+		HelmManifest: rel.Manifest,
+		GVR:          HelmReleaseResource.GVR,
 	}
 }
 
 // helmReleasesChanged checks if the Helm releases have actually changed
-func helmReleasesChanged(old, new []Resource) bool {
+func helmReleasesChanged(old, new []TrackedObject) bool {
 	if len(old) != len(new) {
 		return true
 	}
 
 	// Create maps for comparison
-	oldMap := make(map[string]Resource)
+	oldMap := make(map[string]*HelmRelease)
 	for _, res := range old {
-		key := res.Namespace + "/" + res.Name
-		oldMap[key] = res
+		if helmRes, ok := res.(*HelmRelease); ok {
+			key := helmRes.GetNamespace() + "/" + helmRes.GetName()
+			oldMap[key] = helmRes
+		}
 	}
 
-	newMap := make(map[string]Resource)
+	newMap := make(map[string]*HelmRelease)
 	for _, res := range new {
-		key := res.Namespace + "/" + res.Name
-		newMap[key] = res
+		if helmRes, ok := res.(*HelmRelease); ok {
+			key := helmRes.GetNamespace() + "/" + helmRes.GetName()
+			newMap[key] = helmRes
+		}
 	}
 
 	// Check if any release is missing or different

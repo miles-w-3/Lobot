@@ -8,8 +8,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
-// convertArgoApplicationToResource converts an ArgoCD Application CRD to a k8s.Resource
-func convertArgoApplicationToResource(app *unstructured.Unstructured, gvr schema.GroupVersionResource) Resource {
+// convertArgoApplicationToTrackedObject converts an ArgoCD Application CRD to a TrackedObject
+func convertArgoApplicationToTrackedObject(app *unstructured.Unstructured, gvr schema.GroupVersionResource) TrackedObject {
 	// Extract sync status from status.sync.status
 	syncStatus, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 	if syncStatus == "" {
@@ -47,38 +47,64 @@ func convertArgoApplicationToResource(app *unstructured.Unstructured, gvr schema
 		age = time.Since(creationTime.Time)
 	}
 
-	return Resource{
-		Name:              app.GetName(),
-		Namespace:         app.GetNamespace(),
-		Kind:              "Application",
-		APIVersion:        "argoproj.io/v1alpha1",
-		Status:            syncStatus, // Use sync status as primary status
-		Age:               age,
-		Labels:            app.GetLabels(),
-		Raw:               app,
-		GVR:               gvr,
-		ArgoCDSyncStatus:  syncStatus,
-		ArgoCDHealth:      health,
-		ArgoCDSourceRepo:  sourceRepo,
-		ArgoCDRevision:    revision,
-		ArgoCDDestination: destination,
-		IsArgoApplication: true,
+	return &ArgoCDApp{
+		CoreFields: CoreFields{
+			Name:      app.GetName(),
+			Namespace: app.GetNamespace(),
+			Status:    syncStatus, // Use sync status as primary status
+			Age:       age,
+			Raw:       app,
+		},
+		APIVersion:  "argoproj.io/v1alpha1",
+		Kind:        "Application",
+		Labels:      app.GetLabels(),
+		GVR:         gvr,
+		SyncStatus:  syncStatus,
+		Health:      health,
+		SourceRepo:  sourceRepo,
+		Revision:    revision,
+		Destination: destination,
 	}
 }
 
 // isArgoManagedResource checks if a resource is managed by ArgoCD
-func isArgoManagedResource(resource *Resource) bool {
-	if resource.Labels == nil {
+func isArgoManagedResource(resource TrackedObject) bool {
+	// Check for ArgoCD instance label (works for both K8s resources and ArgoCD apps)
+	switch res := resource.(type) {
+	case *K8sResource:
+		if res.Labels == nil {
+			return false
+		}
+		_, exists := res.Labels["argocd.argoproj.io/instance"]
+		return exists
+	case *ArgoCDApp:
+		// ArgoCD apps can be managed by other apps (app-of-apps pattern)
+		if res.Labels != nil {
+			_, exists := res.Labels["argocd.argoproj.io/instance"]
+			return exists
+		}
+		return false
+	default:
 		return false
 	}
-	_, exists := resource.Labels["argocd.argoproj.io/instance"]
-	return exists
 }
 
 // getArgoApplicationName returns the ArgoCD Application name that manages this resource
-func getArgoApplicationName(resource *Resource) string {
-	if resource.Labels == nil {
+func getArgoApplicationName(resource TrackedObject) string {
+	// Return the value of argocd.argoproj.io/instance label
+	// This works for both regular resources and ArgoCD apps (app-of-apps pattern)
+	switch res := resource.(type) {
+	case *K8sResource:
+		if res.Labels == nil {
+			return ""
+		}
+		return res.Labels["argocd.argoproj.io/instance"]
+	case *ArgoCDApp:
+		if res.Labels == nil {
+			return ""
+		}
+		return res.Labels["argocd.argoproj.io/instance"]
+	default:
 		return ""
 	}
-	return resource.Labels["argocd.argoproj.io/instance"]
 }
