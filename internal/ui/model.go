@@ -577,6 +577,10 @@ func (m *Model) GetCurrentModeHelp() help.KeyMap {
 	case ViewModeManifest:
 		return m.manifestKeys
 	case ViewModeVisualize:
+		// Get the actual visualizer's keymap (tree or graph)
+		if m.visualizer != nil {
+			return m.visualizer.GetKeyMap()
+		}
 		return m.visualizerKeys
 	case ViewModeFilter:
 		return m.filterKeys

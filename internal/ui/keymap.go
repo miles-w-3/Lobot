@@ -244,13 +244,8 @@ func (k ManifestModeKeyMap) FullHelp() [][]key.Binding {
 	}
 }
 
-// VisualizerModeKeyMap defines key bindings for visualizer mode
+// VisualizerModeKeyMap defines key bindings for visualizer mode (base for tree/graph)
 type VisualizerModeKeyMap struct {
-	// Navigation
-	Up     key.Binding
-	Down   key.Binding
-	Expand key.Binding
-
 	// Panel focus
 	FocusLeft  key.Binding
 	FocusRight key.Binding
@@ -265,34 +260,20 @@ type VisualizerModeKeyMap struct {
 // DefaultVisualizerModeKeyMap returns the default key bindings for visualizer mode
 func DefaultVisualizerModeKeyMap() VisualizerModeKeyMap {
 	return VisualizerModeKeyMap{
-		// Navigation
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "navigate"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "navigate"),
-		),
-		Expand: key.NewBinding(
-			key.WithKeys(" "),
-			key.WithHelp("space", "expand/collapse"),
-		),
-
 		// Panel focus
 		FocusLeft: key.NewBinding(
 			key.WithKeys("left", "h"),
-			key.WithHelp("←/h", "focus tree"),
+			key.WithHelp("←/h", "focus left"),
 		),
 		FocusRight: key.NewBinding(
 			key.WithKeys("right", "l"),
-			key.WithHelp("→/l", "focus details"),
+			key.WithHelp("→/l", "focus right"),
 		),
 
 		// Actions
 		ToggleDetails: key.NewBinding(
 			key.WithKeys("d"),
-			key.WithHelp("d", "toggle details panel"),
+			key.WithHelp("d", "toggle details"),
 		),
 
 		// Exit
@@ -305,13 +286,96 @@ func DefaultVisualizerModeKeyMap() VisualizerModeKeyMap {
 
 // ShortHelp returns a short list of key bindings
 func (k VisualizerModeKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.FocusLeft, k.FocusRight, k.ToggleDetails, k.Back}
+	return []key.Binding{k.FocusLeft, k.FocusRight, k.ToggleDetails, k.Back}
 }
 
 // FullHelp returns the full list of key bindings organized by category
 func (k VisualizerModeKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.Expand},
+		{k.FocusLeft, k.FocusRight},
+		{k.ToggleDetails},
+		{k.Back},
+	}
+}
+
+// TreeVisualizerKeyMap defines key bindings specific to tree visualizer
+type TreeVisualizerKeyMap struct {
+	// Embed base visualizer keys
+	VisualizerModeKeyMap
+
+	// Navigation
+	Up       key.Binding
+	Down     key.Binding
+	PageUp   key.Binding
+	PageDown key.Binding
+	Home     key.Binding
+	End      key.Binding
+
+	// Expand/Collapse
+	Toggle     key.Binding
+	ExpandAll  key.Binding
+	CollapseAll key.Binding
+}
+
+// DefaultTreeVisualizerKeyMap returns the default key bindings for tree visualizer
+func DefaultTreeVisualizerKeyMap() TreeVisualizerKeyMap {
+	return TreeVisualizerKeyMap{
+		VisualizerModeKeyMap: DefaultVisualizerModeKeyMap(),
+
+		// Navigation
+		Up: key.NewBinding(
+			key.WithKeys("up", "k"),
+			key.WithHelp("↑/k", "move up"),
+		),
+		Down: key.NewBinding(
+			key.WithKeys("down", "j"),
+			key.WithHelp("↓/j", "move down"),
+		),
+		PageUp: key.NewBinding(
+			key.WithKeys("pgup", "ctrl+u"),
+			key.WithHelp("pgup", "page up"),
+		),
+		PageDown: key.NewBinding(
+			key.WithKeys("pgdown", "ctrl+d"),
+			key.WithHelp("pgdown", "page down"),
+		),
+		Home: key.NewBinding(
+			key.WithKeys("home", "g"),
+			key.WithHelp("g", "go to top"),
+		),
+		End: key.NewBinding(
+			key.WithKeys("end", "G"),
+			key.WithHelp("G", "go to bottom"),
+		),
+
+		// Expand/Collapse
+		Toggle: key.NewBinding(
+			key.WithKeys("enter", " "),
+			key.WithHelp("enter/space", "toggle"),
+		),
+		ExpandAll: key.NewBinding(
+			key.WithKeys("E"),
+			key.WithHelp("E", "expand all"),
+		),
+		CollapseAll: key.NewBinding(
+			key.WithKeys("C"),
+			key.WithHelp("C", "collapse all"),
+		),
+	}
+}
+
+// ShortHelp returns a short list of key bindings
+func (k TreeVisualizerKeyMap) ShortHelp() []key.Binding {
+	return []key.Binding{
+		k.Up, k.Down, k.Toggle, k.FocusLeft, k.FocusRight, k.Back,
+	}
+}
+
+// FullHelp returns the full list of key bindings organized by category
+func (k TreeVisualizerKeyMap) FullHelp() [][]key.Binding {
+	return [][]key.Binding{
+		{k.Up, k.Down, k.PageUp, k.PageDown, k.Home, k.End},
+		{k.Toggle, k.ExpandAll, k.CollapseAll},
 		{k.FocusLeft, k.FocusRight},
 		{k.ToggleDetails},
 		{k.Back},
