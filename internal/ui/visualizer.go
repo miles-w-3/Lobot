@@ -19,9 +19,19 @@ const (
 	FocusDetails
 )
 
+// VisualizationMode represents the current visualization mode
+type VisualizationMode int
+
+const (
+	VisualizationModeTree VisualizationMode = iota
+	VisualizationModeGraph
+)
+
 // VisualizerModel represents the visualization mode component
 type VisualizerModel struct {
+	mode            VisualizationMode
 	treeVisualizer  TreeVisualizerModel
+	graphVisualizer *GraphVisualizerModel
 	graph           *graph.ResourceGraph
 	width           int
 	height          int
@@ -31,16 +41,18 @@ type VisualizerModel struct {
 
 // NewVisualizerModel creates a new visualizer model
 func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) VisualizerModel {
-	// Create tree visualizer
+	// Create tree visualizer (default mode)
 	treeVisualizer := NewTreeVisualizerModel(resourceGraph, width, height)
 
 	return VisualizerModel{
-		treeVisualizer: treeVisualizer,
-		graph:          resourceGraph,
-		width:          width,
-		height:         height,
-		rootResource:   resourceGraph.Root.Resource,
-		keys:           DefaultVisualizerModeKeyMap(),
+		mode:            VisualizationModeTree,
+		treeVisualizer:  treeVisualizer,
+		graphVisualizer: nil, // Lazy initialization
+		graph:           resourceGraph,
+		width:           width,
+		height:          height,
+		rootResource:    resourceGraph.Root.Resource,
+		keys:            DefaultVisualizerModeKeyMap(),
 	}
 }
 
@@ -48,21 +60,60 @@ func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) V
 func (m VisualizerModel) Update(msg tea.Msg) (VisualizerModel, tea.Cmd) {
 	var cmd tea.Cmd
 
-	// Delegate to tree visualizer
-	m.treeVisualizer, cmd = m.treeVisualizer.Update(msg)
+	// Check for mode toggle (Shift+G)
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		if msg.String() == "G" {
+			// Toggle between tree and graph mode
+			if m.mode == VisualizationModeTree {
+				// Lazy initialize graph visualizer
+				if m.graphVisualizer == nil {
+					m.graphVisualizer = NewGraphVisualizerModel(m.graph, m.width, m.height)
+				}
+				m.mode = VisualizationModeGraph
+			} else {
+				m.mode = VisualizationModeTree
+			}
+			return m, nil
+		}
 
+	case tea.WindowSizeMsg:
+		// Propagate size to both visualizers
+		m.width = msg.Width
+		m.height = msg.Height
+		if m.graphVisualizer != nil {
+			// Recreate graph visualizer with new size
+			m.graphVisualizer = NewGraphVisualizerModel(m.graph, m.width, m.height)
+		}
+		// Tree visualizer handles resize in its own Update
+	}
+
+	// Delegate to active visualizer
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		updated, cmd := m.graphVisualizer.Update(msg)
+		m.graphVisualizer = &updated
+		return m, cmd
+	}
+
+	// Default to tree visualizer
+	m.treeVisualizer, cmd = m.treeVisualizer.Update(msg)
 	return m, cmd
 }
 
 // View renders the visualizer
 func (m *VisualizerModel) View() string {
-	// Delegate to tree visualizer
+	// Delegate to active visualizer
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		return m.graphVisualizer.View()
+	}
 	return m.treeVisualizer.View()
 }
 
 // GetKeyMap returns the current visualizer's key map for help display
 func (m *VisualizerModel) GetKeyMap() help.KeyMap {
-	// Currently only tree visualizer, but could check for graph visualizer in future
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		return m.graphVisualizer.keys
+	}
 	return m.treeVisualizer.keys
 }
 

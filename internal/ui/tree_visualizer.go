@@ -502,7 +502,7 @@ func (m *TreeVisualizerModel) renderTreeView() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
-		Render("▶ Resource Relationships")
+		Render("▶ Resource Tree (G: graph view)")
 
 	// Calculate tree panel width
 	var treeWidth int
