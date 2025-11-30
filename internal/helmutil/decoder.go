@@ -50,7 +50,7 @@ func DecodeHelmSecret(secret *corev1.Secret, logger *slog.Logger) (*HelmRelease,
 		return nil, fmt.Errorf("not a Helm release secret, type: %s", secret.Type)
 	}
 
-	logger.Debug("Secret", "name", secret.Name, "data", secret.Data)
+	logger.Debug("Secret", "name", secret.Name)
 
 	// StringData will be base64 decoded, and then we can put it in bytes
 	releaseData, ok := secret.Data["release"]

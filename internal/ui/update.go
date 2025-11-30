@@ -29,7 +29,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.table.SetHeight(tableHeight)
 		// Table width should fill the border container (border takes 2 chars, content has 4 chars padding)
-		m.table.SetWidth(m.width - 6)
+		m.table.SetWidth(m.width - 6 - 10) // TODO: -10 for favorites
 
 		// Update manifest viewport size if in manifest mode
 		if m.viewMode == ViewModeManifest {
@@ -286,6 +286,10 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.NextResourceType()
 	case key.Matches(msg, m.normalKeys.PrevType):
 		m.PrevResourceType()
+
+	case key.Matches(msg, m.normalKeys.ToggleShowFavoriteTypes):
+		m.logger.Info("Detected toggle!", "set", !m.showingFavoriteTypes)
+		m.showingFavoriteTypes = !m.showingFavoriteTypes
 
 	// Filter by resource name
 	case key.Matches(msg, m.normalKeys.Filter):

@@ -57,6 +57,8 @@ type NormalModeKeyMap struct {
 	Filter    key.Binding
 	Refresh   key.Binding
 
+	ToggleShowFavoriteTypes key.Binding
+
 	// Selectors
 	NamespaceSelector    key.Binding
 	ResourceTypeSelector key.Binding
@@ -97,12 +99,12 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 
 		// Resource type navigation
 		NextType: key.NewBinding(
-			key.WithKeys("tab", "l", "right"),
-			key.WithHelp("tab/l/→", "next resource type"),
+			key.WithKeys("l", "right"),
+			key.WithHelp("l/→", "next resource type"),
 		),
 		PrevType: key.NewBinding(
-			key.WithKeys("shift+tab", "h", "left"),
-			key.WithHelp("shift+tab/h/←", "previous resource type"),
+			key.WithKeys("h", "left"),
+			key.WithHelp("h/←", "previous resource type"),
 		),
 
 		// Actions
@@ -139,6 +141,11 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 		ContextSelector: key.NewBinding(
 			key.WithKeys("ctrl+k"),
 			key.WithHelp("ctrl+k", "select context"),
+		),
+
+		ToggleShowFavoriteTypes: key.NewBinding(
+			key.WithKeys("tab"),
+			key.WithHelp("tab", "toggle favoirtes"),
 		),
 
 		// Exit
@@ -312,8 +319,8 @@ type TreeVisualizerKeyMap struct {
 	End      key.Binding
 
 	// Expand/Collapse
-	Toggle     key.Binding
-	ExpandAll  key.Binding
+	Toggle      key.Binding
+	ExpandAll   key.Binding
 	CollapseAll key.Binding
 }
 
@@ -387,13 +394,21 @@ type GraphVisualizerKeyMap struct {
 	// Embed base visualizer keys
 	VisualizerModeKeyMap
 
-	// Navigation
-	Up       key.Binding
-	Down     key.Binding
-	PageUp   key.Binding
-	PageDown key.Binding
-	Home     key.Binding
-	End      key.Binding
+	// Node selection (arrow keys)
+	Up    key.Binding
+	Down  key.Binding
+	Left  key.Binding
+	Right key.Binding
+
+	// Canvas panning (i/j/k/l)
+	PanUp    key.Binding
+	PanDown  key.Binding
+	PanLeft  key.Binding
+	PanRight key.Binding
+
+	// Jump to first/last
+	Home key.Binding
+	End  key.Binding
 }
 
 // DefaultGraphVisualizerKeyMap returns the default key bindings for graph visualizer
@@ -401,30 +416,50 @@ func DefaultGraphVisualizerKeyMap() GraphVisualizerKeyMap {
 	return GraphVisualizerKeyMap{
 		VisualizerModeKeyMap: DefaultVisualizerModeKeyMap(),
 
-		// Navigation
+		// Node selection (arrow keys)
 		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "move up"),
+			key.WithKeys("up"),
+			key.WithHelp("↑", "select up"),
 		),
 		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "move down"),
+			key.WithKeys("down"),
+			key.WithHelp("↓", "select down"),
 		),
-		PageUp: key.NewBinding(
-			key.WithKeys("pgup", "ctrl+u"),
-			key.WithHelp("pgup", "page up"),
+		Left: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←", "select left"),
 		),
-		PageDown: key.NewBinding(
-			key.WithKeys("pgdown", "ctrl+d"),
-			key.WithHelp("pgdown", "page down"),
+		Right: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("→", "select right"),
 		),
+
+		// Canvas panning (i/j/k/l)
+		PanUp: key.NewBinding(
+			key.WithKeys("i"),
+			key.WithHelp("i", "pan up"),
+		),
+		PanDown: key.NewBinding(
+			key.WithKeys("k"),
+			key.WithHelp("k", "pan down"),
+		),
+		PanLeft: key.NewBinding(
+			key.WithKeys("j"),
+			key.WithHelp("j", "pan left"),
+		),
+		PanRight: key.NewBinding(
+			key.WithKeys("l"),
+			key.WithHelp("l", "pan right"),
+		),
+
+		// Jump to first/last
 		Home: key.NewBinding(
 			key.WithKeys("home", "g"),
-			key.WithHelp("g", "go to top"),
+			key.WithHelp("g", "first node"),
 		),
 		End: key.NewBinding(
-			key.WithKeys("end"),
-			key.WithHelp("end", "go to bottom"),
+			key.WithKeys("end", "G"),
+			key.WithHelp("G", "last node"),
 		),
 	}
 }
@@ -432,16 +467,15 @@ func DefaultGraphVisualizerKeyMap() GraphVisualizerKeyMap {
 // ShortHelp returns a short list of key bindings
 func (k GraphVisualizerKeyMap) ShortHelp() []key.Binding {
 	return []key.Binding{
-		k.Up, k.Down, k.FocusLeft, k.FocusRight, k.Back,
+		k.Up, k.Down, k.PanUp, k.PanDown, k.Back,
 	}
 }
 
 // FullHelp returns the full list of key bindings organized by category
 func (k GraphVisualizerKeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Up, k.Down, k.PageUp, k.PageDown, k.Home, k.End},
-		{k.FocusLeft, k.FocusRight},
-		{k.ToggleDetails},
+		{k.Up, k.Down, k.Left, k.Right, k.Home, k.End},
+		{k.PanUp, k.PanDown, k.PanLeft, k.PanRight},
 		{k.Back},
 	}
 }

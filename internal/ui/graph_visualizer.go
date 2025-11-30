@@ -25,6 +25,8 @@ type GraphVisualizerModel struct {
 	canvasHeight    int
 	showDetails     bool
 	focusedPanel    FocusPanel
+	selectedIndex   int
+	flattenedNodes  []*graph.Node
 	rootResource    k8s.TrackedObject
 	keys            GraphVisualizerKeyMap
 }
@@ -47,6 +49,9 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 	canvasWidth := max(layout.maxLayerWidth+2*marginLeft, graphWidth-4)
 	canvasHeight := layout.totalHeight
 
+	// Flatten nodes for navigation (layer by layer, left to right)
+	flattenedNodes := flattenGraphForNavigation(layout)
+
 	model := &GraphVisualizerModel{
 		graph:           resourceGraph,
 		layout:          layout,
@@ -57,8 +62,10 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 		detailsWidth:    detailsWidth,
 		canvasWidth:     canvasWidth,
 		canvasHeight:    canvasHeight,
-		showDetails:     true,
+		showDetails:     false, // Hidden in graph view
 		focusedPanel:    FocusTree,
+		selectedIndex:   0,
+		flattenedNodes:  flattenedNodes,
 		rootResource:    resourceGraph.Root.Resource,
 		keys:            DefaultGraphVisualizerKeyMap(),
 	}
@@ -67,117 +74,76 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 	return model
 }
 
+// flattenGraphForNavigation creates a linear array of nodes for navigation
+func flattenGraphForNavigation(layout *GraphLayout) []*graph.Node {
+	nodes := make([]*graph.Node, 0)
+	for _, layer := range layout.layers {
+		for _, layoutNode := range layer {
+			nodes = append(nodes, layoutNode.graphNode)
+		}
+	}
+	return nodes
+}
+
 // updateViewportContent renders the graph and updates the viewport
 func (m *GraphVisualizerModel) updateViewportContent() {
-	// Build output line by line
-	var lines []string
-	for y := 0; y < m.canvasHeight; y++ {
-		lines = append(lines, strings.Repeat(" ", m.canvasWidth))
-	}
+	// 1. Create background canvas with edge lines
+	canvas := NewCanvas(m.canvasWidth, m.canvasHeight)
 
-	// 1. Draw edges on canvas
 	for _, edge := range m.graph.Edges {
 		fromPos, fromExists := m.layout.nodePositions[edge.From]
 		toPos, toExists := m.layout.nodePositions[edge.To]
-		if !fromExists || !toExists {
+		if fromExists && toExists {
+			canvas.DrawEdge(fromPos, toPos)
+		}
+	}
+
+	// 2. Build the final view by overlaying boxes on the background
+	// Start with the background lines
+	lines := canvas.Lines()
+
+	// For each box, we need to overlay it on the correct lines
+	for i, node := range m.flattenedNodes {
+		pos, exists := m.layout.nodePositions[node]
+		if !exists {
 			continue
 		}
 
-		// Draw edge characters directly into lines
-		fromCenterX := fromPos.X + fromPos.Width/2
-		fromBottomY := fromPos.Y + fromPos.Height
-		toCenterX := toPos.X + toPos.Width/2
-		toTopY := toPos.Y
+		selected := i == m.selectedIndex
+		box := m.renderNodeBox(node, selected)
+		boxLines := strings.Split(box, "\n")
 
-		// Vertical line case
-		if fromCenterX == toCenterX {
-			for y := fromBottomY; y < toTopY && y < m.canvasHeight; y++ {
-				if y >= 0 && fromCenterX >= 0 && fromCenterX < m.canvasWidth {
-					lineRunes := []rune(lines[y])
-					if y == toTopY-1 {
-						lineRunes[fromCenterX] = '▼'
-					} else {
-						lineRunes[fromCenterX] = '│'
-					}
-					lines[y] = string(lineRunes)
-				}
-			}
-		} else {
-			// L-shaped line
-			midY := fromBottomY + (toTopY-fromBottomY)/2
-
-			// Vertical from parent
-			for y := fromBottomY; y < midY && y < m.canvasHeight; y++ {
-				if y >= 0 && fromCenterX >= 0 && fromCenterX < m.canvasWidth {
-					lineRunes := []rune(lines[y])
-					lineRunes[fromCenterX] = '│'
-					lines[y] = string(lineRunes)
-				}
-			}
-
-			// Horizontal segment
-			startX := min(fromCenterX, toCenterX)
-			endX := max(fromCenterX, toCenterX)
-			if midY >= 0 && midY < m.canvasHeight {
-				lineRunes := []rune(lines[midY])
-				for x := startX; x <= endX && x < m.canvasWidth; x++ {
-					if x == fromCenterX || x == toCenterX {
-						lineRunes[x] = '┼'
-					} else {
-						lineRunes[x] = '─'
-					}
-				}
-				lines[midY] = string(lineRunes)
-			}
-
-			// Vertical to child
-			for y := midY + 1; y < toTopY && y < m.canvasHeight; y++ {
-				if y >= 0 && toCenterX >= 0 && toCenterX < m.canvasWidth {
-					lineRunes := []rune(lines[y])
-					lineRunes[toCenterX] = '│'
-					lines[y] = string(lineRunes)
-				}
-			}
-			if toTopY-1 >= 0 && toTopY-1 < m.canvasHeight && toCenterX >= 0 && toCenterX < m.canvasWidth {
-				lineRunes := []rune(lines[toTopY-1])
-				lineRunes[toCenterX] = '▼'
-				lines[toTopY-1] = string(lineRunes)
-			}
-		}
-	}
-
-	// 2. Overlay boxes - render each box and place it using lipgloss Place
-	for _, layer := range m.layout.layers {
-		for _, layoutNode := range layer {
-			pos, exists := m.layout.nodePositions[layoutNode.graphNode]
-			if !exists {
-				continue
-			}
-
-			box := m.renderNodeBox(layoutNode.graphNode, false)
-			boxLines := strings.Split(box, "\n")
-
-		// Place box lines at the correct position
+		// Overlay box lines at the specified position
 		for dy, boxLine := range boxLines {
 			y := pos.Y + dy
 			if y >= 0 && y < len(lines) {
-				// Use lipgloss Place to position the box content properly
-				lineBefore := ""
-				if pos.X > 0 {
-					lineBefore = lines[y][:min(pos.X, len(lines[y]))]
-				}
-
-				lineAfter := ""
+				// Get the background line
+				bgLine := lines[y]
+				bgRunes := []rune(bgLine)
+				
+				// Calculate effective width of the box line (visual width)
 				boxWidth := lipgloss.Width(boxLine)
-				afterX := pos.X + boxWidth
-				if afterX < len(lines[y]) {
-					lineAfter = lines[y][afterX:]
+				
+				// If the box extends beyond the background line, pad the background
+				if pos.X+boxWidth > len(bgRunes) {
+					padding := pos.X + boxWidth - len(bgRunes)
+					bgRunes = append(bgRunes, []rune(strings.Repeat(" ", padding))...)
 				}
 
-				lines[y] = lineBefore + boxLine + lineAfter
+				// Create the new line by combining:
+				// 1. Background before the box
+				// 2. The box content
+				// 3. Background after the box
+				
+				prefix := string(bgRunes[:pos.X])
+				suffix := ""
+				if pos.X+boxWidth < len(bgRunes) {
+					suffix = string(bgRunes[pos.X+boxWidth:])
+				}
+				
+				lines[y] = prefix + boxLine + suffix
 			}
 		}
-	}
 	}
 
 	// 3. Set viewport content
@@ -301,51 +267,117 @@ func (m GraphVisualizerModel) Update(msg tea.Msg) (GraphVisualizerModel, tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch {
-		case key.Matches(msg, m.keys.FocusLeft):
-			if m.showDetails {
-				m.focusedPanel = FocusTree
-			}
+		// Arrow keys for node selection
+		case key.Matches(msg, m.keys.Up):
+			m.navigateUp()
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
+			return m, nil
+		case key.Matches(msg, m.keys.Down):
+			m.navigateDown()
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
+			return m, nil
+		case key.Matches(msg, m.keys.Left):
+			m.navigateLeft()
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
+			return m, nil
+		case key.Matches(msg, m.keys.Right):
+			m.navigateRight()
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
 			return m, nil
 
-		case key.Matches(msg, m.keys.FocusRight):
-			if m.showDetails {
-				m.focusedPanel = FocusDetails
-			}
+		// i/j/k/l for canvas panning
+		case key.Matches(msg, m.keys.PanUp):
+			m.viewport.LineUp(3)
+			return m, nil
+		case key.Matches(msg, m.keys.PanDown):
+			m.viewport.LineDown(3)
+			return m, nil
+		case key.Matches(msg, m.keys.PanLeft):
+			// Horizontal panning not supported by viewport - would need custom scrolling
+			// For now, just ignore
+			return m, nil
+		case key.Matches(msg, m.keys.PanRight):
+			// Horizontal panning not supported by viewport - would need custom scrolling
+			// For now, just ignore
 			return m, nil
 
-		case key.Matches(msg, m.keys.ToggleDetails):
-			m.showDetails = !m.showDetails
-			if !m.showDetails {
-				m.focusedPanel = FocusTree
-			}
+		// Jump to first/last node
+		case key.Matches(msg, m.keys.Home):
+			m.selectedIndex = 0
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
+			return m, nil
+		case key.Matches(msg, m.keys.End):
+			m.selectedIndex = len(m.flattenedNodes) - 1
+			m.ensureSelectedVisible()
+			m.updateViewportContent()
 			return m, nil
 		}
-	}
-
-	// Navigation when graph is focused - use arrow keys for panning
-	if m.focusedPanel == FocusTree {
-		// Let viewport handle all scrolling/panning
-		m.viewport, cmd = m.viewport.Update(msg)
-	} else if m.focusedPanel == FocusDetails && m.showDetails {
-		m.detailsViewport, cmd = m.detailsViewport.Update(msg)
 	}
 
 	return m, cmd
 }
 
-// View renders the graph visualizer
-func (m *GraphVisualizerModel) View() string {
-	if m.showDetails {
-		graphView := m.renderGraphView()
-		detailsView := m.renderDetailsPanel()
+// Navigation methods
+func (m *GraphVisualizerModel) navigateUp() {
+	if m.selectedIndex > 0 {
+		m.selectedIndex--
+	}
+}
 
-		return lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			graphView,
-			detailsView,
-		)
+func (m *GraphVisualizerModel) navigateDown() {
+	if m.selectedIndex < len(m.flattenedNodes)-1 {
+		m.selectedIndex++
+	}
+}
+
+func (m *GraphVisualizerModel) navigateLeft() {
+	// Move to previous node in flattened list
+	if m.selectedIndex > 0 {
+		m.selectedIndex--
+	}
+}
+
+func (m *GraphVisualizerModel) navigateRight() {
+	// Move to next node in flattened list
+	if m.selectedIndex < len(m.flattenedNodes)-1 {
+		m.selectedIndex++
+	}
+}
+
+func (m *GraphVisualizerModel) ensureSelectedVisible() {
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.flattenedNodes) {
+		return
 	}
 
+	// Calculate selected node's Y position
+	selectedNode := m.flattenedNodes[m.selectedIndex]
+	nodePos, exists := m.layout.nodePositions[selectedNode]
+	if !exists {
+		return
+	}
+
+	viewportHeight := m.viewport.Height
+	currentYOffset := m.viewport.YOffset
+
+	// Scroll if selected is above viewport
+	if nodePos.Y < currentYOffset {
+		m.viewport.SetYOffset(nodePos.Y)
+	}
+
+	// Scroll if selected is below viewport
+	if nodePos.Y+nodeHeight >= currentYOffset+viewportHeight {
+		m.viewport.SetYOffset(nodePos.Y - viewportHeight + nodeHeight + 1)
+	}
+}
+
+// View renders the graph visualizer
+func (m *GraphVisualizerModel) View() string {
+	// Details panel is hidden in graph view
 	return m.renderGraphView()
 }
 
@@ -356,12 +388,8 @@ func (m *GraphVisualizerModel) renderGraphView() string {
 		Foreground(ColorPrimary).
 		Render("▶ Resource Graph (G: tree view)")
 
-	var graphWidth int
-	if !m.showDetails {
-		graphWidth = m.width - 2
-	} else {
-		graphWidth = m.width - m.detailsWidth - 2
-	}
+	// Always use full width in graph view (no details panel)
+	graphWidth := m.width - 2
 
 	borderColor := ColorMuted
 	if m.focusedPanel == FocusTree {
@@ -377,7 +405,7 @@ func (m *GraphVisualizerModel) renderGraphView() string {
 
 	helpText := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Render("arrows: pan • d: details • G: tree view • q: back")
+		Render("arrows: select node • i/j/k/l: pan • g/G: first/last • G: tree view • q: back")
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

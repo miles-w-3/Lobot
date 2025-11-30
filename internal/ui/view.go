@@ -12,7 +12,6 @@ import (
 // View renders the UI
 func (m Model) View() string {
 	var baseView string
-
 	if m.viewMode == ViewModeSplash {
 		baseView = m.splash.View()
 	} else if m.viewMode == ViewModeManifest {
@@ -46,6 +45,11 @@ func (m Model) renderNormalView() string {
 
 	// Main content area with border
 	mainContent := m.renderMainContent(contentHeight - 2)
+	// Extend with favorite types details as needed
+	if m.showingFavoriteTypes {
+		favoriteTypesContent := m.renderFavoriteTypesContent()
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, favoriteTypesContent, mainContent)
+	}
 
 	// Wrap main content in border
 	borderedContent := lipgloss.NewStyle().
@@ -83,6 +87,15 @@ func (m Model) renderMainContent(height int) string {
 	sections = append(sections, m.renderStatusBar())
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m Model) renderFavoriteTypesContent() string {
+	favoriteTypesBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(10).
+		Height(26)
+	return favoriteTypesBox.Render(m.favoriteTypesViewport.View())
 }
 
 // renderManifestView renders the manifest viewer
@@ -169,12 +182,6 @@ func (m Model) renderStatusLine() string {
 		Padding(0, 1).
 		MarginBottom(1).
 		Render(line)
-}
-
-// renderHeader renders the header
-func (m Model) renderHeader() string {
-	title := titleStyle.Render("Lobot")
-	return headerStyle.Render(title)
 }
 
 // renderFilterBar renders the filter input bar

@@ -81,8 +81,10 @@ type Model struct {
 	// Selector (for namespace/context selection)
 	selector *SelectorModel
 
-	// Visualizer
 	visualizer *VisualizerModel
+
+	showingFavoriteTypes  bool
+	favoriteTypesViewport viewport.Model
 
 	// Key bindings
 	globalKeys     GlobalKeyMap
@@ -121,15 +123,6 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
 
-	// TODO: I dont think this is needed, add placeholders if it is needed
-	// Initialize table with empty columns (will be set later)
-	// columns := []table.Column{
-	// 	{Title: "NAME", Width: 40},
-	// 	{Title: "NAMESPACE", Width: 20},
-	// 	{Title: "STATUS", Width: 15},
-	// 	{Title: "AGE", Width: 10},
-	// }
-
 	t := table.New(
 		// table.WithColumns(columns),
 		table.WithFocused(true),
@@ -152,27 +145,34 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 	// Create graph builder with the resource service as the provider
 	graphBuilder := graph.NewBuilder(resourceService, nil)
 
+	// TODO: Replace these hardcoded values
+	favoriteTypesViewport := viewport.New(10, 30)
+
+	favoriteTypesViewport.SetContent("Test\nTest2\nTest3\n")
+
 	return Model{
-		logger:          logger,
-		resourceService: resourceService,
-		graphBuilder:    graphBuilder,
-		trackedTypes:    k8s.DefaultResourceTypes(),
-		currentType:     0,
-		selectedIndex:   0,
-		scrollOffset:    0,
-		viewMode:        ViewModeSplash,
-		namespaceFilter: filters.NewNamespaceFilter(),
-		nameFilter:      filters.NewResourceNameFilter(),
-		filterInput:     filterInput,
-		splash:          splash.NewModel(logger),
-		table:           t,
-		ready:           false,
-		modal:           NewModal(),
-		globalKeys:      DefaultGlobalKeyMap(),
-		normalKeys:      DefaultNormalModeKeyMap(),
-		manifestKeys:    DefaultManifestModeKeyMap(),
-		visualizerKeys:  DefaultVisualizerModeKeyMap(),
-		filterKeys:      DefaultFilterModeKeyMap(),
+		logger:                logger,
+		resourceService:       resourceService,
+		graphBuilder:          graphBuilder,
+		trackedTypes:          k8s.DefaultResourceTypes(),
+		currentType:           0,
+		selectedIndex:         0,
+		scrollOffset:          0,
+		viewMode:              ViewModeSplash,
+		namespaceFilter:       filters.NewNamespaceFilter(),
+		nameFilter:            filters.NewResourceNameFilter(),
+		favoriteTypesViewport: favoriteTypesViewport,
+		filterInput:           filterInput,
+		splash:                splash.NewModel(logger),
+		table:                 t,
+		ready:                 false,
+		showingFavoriteTypes:  false,
+		modal:                 NewModal(),
+		globalKeys:            DefaultGlobalKeyMap(),
+		normalKeys:            DefaultNormalModeKeyMap(),
+		manifestKeys:          DefaultManifestModeKeyMap(),
+		visualizerKeys:        DefaultVisualizerModeKeyMap(),
+		filterKeys:            DefaultFilterModeKeyMap(),
 	}
 }
 
