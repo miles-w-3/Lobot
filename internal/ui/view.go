@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/reflow/ansi"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // View renders the UI
@@ -171,7 +171,7 @@ func (m Model) renderStatusLine() string {
 	right := strings.Join(rightParts, " • ")
 
 	// Calculate spacing to push right content to the right
-	spacing := m.width - lipgloss.Width(left) - ansi.PrintableRuneWidth(right) - 4
+	spacing := m.width - lipgloss.Width(left) - ansi.StringWidth(right) - 4
 	if spacing < 1 {
 		spacing = 1
 	}
@@ -359,7 +359,7 @@ func overlayCenter(base, overlay string, width, height int) string {
 	overlayHeight := len(overlayLines)
 	overlayWidth := 0
 	for _, line := range overlayLines {
-		w := ansi.PrintableRuneWidth(line)
+		w := ansi.StringWidth(line)
 		if w > overlayWidth {
 			overlayWidth = w
 		}
@@ -402,8 +402,8 @@ func overlayLineAt(base, overlay string, x int) string {
 		x = 0
 	}
 
-	baseWidth := ansi.PrintableRuneWidth(base)
-	overlayWidth := ansi.PrintableRuneWidth(overlay)
+	baseWidth := ansi.StringWidth(base)
+	overlayWidth := ansi.StringWidth(overlay)
 	overlayEnd := x + overlayWidth
 
 	// If overlay is completely beyond the base, just append with padding
