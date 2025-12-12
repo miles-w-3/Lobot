@@ -36,6 +36,7 @@ const (
 	ViewModeManifest
 	ViewModeResourceTypeSelection
 	ViewModeVisualize
+	ViewModeUtilization
 )
 
 // Model represents the UI state
@@ -82,6 +83,8 @@ type Model struct {
 	selector *SelectorModel
 
 	visualizer *VisualizerModel
+
+	utilizationDashboard *UtilizationDashboardModel
 
 	showingFavoriteTypes  bool
 	favoriteTypesViewport viewport.Model
@@ -373,6 +376,45 @@ func (m *Model) EnterVisualizeMode() {
 func (m *Model) ExitVisualizeMode() {
 	m.viewMode = ViewModeNormal
 	m.visualizer = nil
+}
+
+// ExitUtilizationMode exits utilization dashboard mode
+func (m *Model) ExitUtilizationMode() {
+	m.viewMode = ViewModeNormal
+	m.utilizationDashboard = nil
+}
+
+// checkMetricsAPIAndOpen checks if metrics API is available and opens the dashboard
+func (m *Model) checkMetricsAPIAndOpen() tea.Cmd {
+	return func() tea.Msg {
+		client := m.resourceService.GetClient()
+		ctx := context.Background()
+		available := client.CheckMetricsAPIAvailable(ctx)
+		return MetricsCheckMsg{Available: available}
+	}
+}
+
+// fetchMetricsData fetches metrics data from the cluster
+func (m *Model) fetchMetricsData() tea.Cmd {
+	return func() tea.Msg {
+		client := m.resourceService.GetClient()
+		ctx := context.Background()
+
+		metricsClient, err := k8s.NewMetricsClient(client, m.logger)
+		if err != nil {
+			return MetricsDataMsg{Error: err}
+		}
+
+		nodeMetrics, podMetrics, err := metricsClient.GetMetricsFromServer(ctx)
+		if err != nil {
+			return MetricsDataMsg{Error: err}
+		}
+
+		return MetricsDataMsg{
+			NodeMetrics: nodeMetrics,
+			PodMetrics:  podMetrics,
+		}
+	}
 }
 
 // EditSelectedResource opens the selected resource in an external editor

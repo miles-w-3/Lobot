@@ -64,6 +64,9 @@ type NormalModeKeyMap struct {
 	ResourceTypeSelector key.Binding
 	ContextSelector      key.Binding
 
+	// Utilization Dashboard
+	UtilizationDashboard key.Binding
+
 	// Exit
 	Quit key.Binding
 }
@@ -148,6 +151,12 @@ func DefaultNormalModeKeyMap() NormalModeKeyMap {
 			key.WithHelp("tab", "toggle favoirtes"),
 		),
 
+		// Utilization Dashboard
+		UtilizationDashboard: key.NewBinding(
+			key.WithKeys("ctrl+u"),
+			key.WithHelp("ctrl+u", "utilization dashboard"),
+		),
+
 		// Exit
 		Quit: key.NewBinding(
 			key.WithKeys("q"),
@@ -167,7 +176,7 @@ func (k NormalModeKeyMap) FullHelp() [][]key.Binding {
 		{k.Up, k.Down, k.PageUp, k.PageDown, k.Home, k.End},
 		{k.NextType, k.PrevType},
 		{k.Enter, k.Edit, k.Visualize, k.Filter, k.Refresh},
-		{k.NamespaceSelector, k.ResourceTypeSelector, k.ContextSelector},
+		{k.NamespaceSelector, k.ResourceTypeSelector, k.ContextSelector, k.UtilizationDashboard},
 		{k.Quit},
 	}
 }

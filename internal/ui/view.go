@@ -18,6 +18,8 @@ func (m Model) View() string {
 		baseView = m.renderManifestView()
 	} else if m.viewMode == ViewModeVisualize {
 		baseView = m.renderVisualizeView()
+	} else if m.viewMode == ViewModeUtilization {
+		baseView = m.renderUtilizationView()
 	} else {
 		baseView = m.renderNormalView()
 	}
@@ -272,31 +274,6 @@ func (m Model) renderModalOverlay(baseView string) string {
 	return overlayCenter(baseView, modalView, m.width, m.height)
 }
 
-// stripANSI removes ANSI escape codes for checking if line has content
-func stripANSI(s string) string {
-	// Simple ANSI stripper - matches ESC [ ... m
-	result := ""
-	inEscape := false
-	escapeDepth := 0
-
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			escapeDepth = 0
-			continue
-		}
-		if inEscape {
-			escapeDepth++
-			if r == 'm' || escapeDepth > 20 {
-				inEscape = false
-			}
-			continue
-		}
-		result += string(r)
-	}
-	return result
-}
-
 // renderSelectorOverlay renders the selector as an overlay on top of the base view
 func (m Model) renderSelectorOverlay(baseView string) string {
 	if m.selector == nil {
@@ -333,7 +310,7 @@ func (m Model) renderSelectorOverlay(baseView string) string {
 		}
 
 		// If selector line has content, use it; otherwise use base
-		trimmed := strings.TrimSpace(stripANSI(selectorLine))
+		trimmed := strings.TrimSpace(ansi.Strip(selectorLine))
 		if trimmed == "" {
 			outputLines[i] = baseLine
 		} else {
@@ -351,6 +328,15 @@ func (m Model) renderVisualizeView() string {
 	}
 
 	return m.visualizer.View()
+}
+
+// renderUtilizationView renders the utilization dashboard
+func (m Model) renderUtilizationView() string {
+	if m.utilizationDashboard == nil {
+		return "Loading metrics..."
+	}
+
+	return m.utilizationDashboard.View()
 }
 
 // overlayCenter overlays content centered on a base view

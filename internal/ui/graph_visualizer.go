@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -29,6 +30,7 @@ type GraphVisualizerModel struct {
 	flattenedNodes  []*graph.Node
 	rootResource    k8s.TrackedObject
 	keys            GraphVisualizerKeyMap
+	help            help.Model
 }
 
 // NewGraphVisualizerModel creates a new graph visualizer
@@ -68,6 +70,7 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 		flattenedNodes:  flattenedNodes,
 		rootResource:    resourceGraph.Root.Resource,
 		keys:            DefaultGraphVisualizerKeyMap(),
+		help:            help.New(),
 	}
 
 	model.updateViewportContent()
@@ -364,15 +367,13 @@ func (m *GraphVisualizerModel) renderGraphView() string {
 		Width(graphWidth).
 		Height(m.height - 4)
 
-	helpText := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Render("arrows: select node • i/j/k/l: pan • g/G: first/last • G: tree view • q: back")
+	helpView := m.help.View(m.keys)
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		graphBox.Render(m.viewport2d.View()),
-		helpText,
+		helpView,
 	)
 }
 
