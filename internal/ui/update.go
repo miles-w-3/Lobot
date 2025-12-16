@@ -76,6 +76,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ErrorMsg:
+		// Log error to error.log file
+		if m.errorTracker != nil {
+			m.errorTracker.LogError("system", msg.Error.Error())
+		}
+
 		if m.viewMode == ViewModeSplash {
 			m.splash.MarkError(msg.Error)
 		} else {
@@ -124,6 +129,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MetricsDataMsg:
 		if msg.Error != nil {
+			if m.errorTracker != nil {
+				m.errorTracker.LogError("metrics", msg.Error.Error())
+			}
 			m.modal.ShowError("Metrics Error", "Failed to fetch metrics: "+msg.Error.Error())
 			return m, nil
 		}

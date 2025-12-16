@@ -809,8 +809,8 @@ func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp
 			continue
 		}
 
-		secretType, found, _ := unstructured.NestedString(raw.Object, "type")
-		if !found || secretType != "helm.sh/release.v1" {
+		// Use helper to check secret type
+		if !helmutil.IsHelmReleaseSecret(raw) {
 			continue
 		}
 
@@ -819,19 +819,9 @@ func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp
 			"name", secret.GetName(),
 			"namespace", secret.GetNamespace())
 
-		// fetch release secret data
-		ctx := context.Background()
-		typedSecret, err := im.client.Clientset.CoreV1().Secrets(secret.GetNamespace()).Get(ctx, secret.GetName(), metav1.GetOptions{})
-		if err != nil {
-			im.logger.Warn("Failed to fetch typed Secret",
-				"name", secret.GetName(),
-				"namespace", secret.GetNamespace(),
-				"error", err)
-			continue
-		}
-
-		// Decode the Helm release from the typed Secret
-		release, err := helmutil.DecodeHelmSecret(typedSecret, im.logger)
+		// Decode the Helm release directly from cached unstructured data
+		// This avoids making individual API calls that cause rate limiting
+		release, err := helmutil.DecodeHelmSecretFromUnstructured(raw, im.logger)
 		if err != nil {
 			im.logger.Warn("Failed to decode Helm secret",
 				"name", secret.GetName(),

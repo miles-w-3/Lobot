@@ -95,6 +95,9 @@ type Model struct {
 	manifestKeys   ManifestModeKeyMap
 	visualizerKeys VisualizerModeKeyMap
 	filterKeys     FilterModeKeyMap
+
+	// Error tracking
+	errorTracker *ErrorTracker
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -121,7 +124,7 @@ type BuildGraphMsg struct {
 }
 
 // NewModel creates a new UI model
-func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
+func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTracker *ErrorTracker) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
@@ -176,6 +179,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 		manifestKeys:          DefaultManifestModeKeyMap(),
 		visualizerKeys:        DefaultVisualizerModeKeyMap(),
 		filterKeys:            DefaultFilterModeKeyMap(),
+		errorTracker:          errorTracker,
 	}
 }
 

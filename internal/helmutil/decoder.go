@@ -12,6 +12,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 )
 
 // HelmRelease represents a Helm v3 release decoded from a Secret
@@ -92,4 +93,18 @@ func DecodeHelmSecret(secret *corev1.Secret, logger *slog.Logger) (*HelmRelease,
 func IsHelmReleaseSecret(secret *unstructured.Unstructured) bool {
 	secretType, found, _ := unstructured.NestedString(secret.Object, "type")
 	return found && secretType == "helm.sh/release.v1"
+}
+
+// DecodeHelmSecretFromUnstructured decodes Helm release from cached unstructured Secret data
+// This avoids making additional API calls by using data already in the informer cache
+func DecodeHelmSecretFromUnstructured(secret *unstructured.Unstructured, logger *slog.Logger) (*HelmRelease, error) {
+	// Convert unstructured to typed Secret
+	// This handles the first level of base64 decoding automatically
+	var typedSecret corev1.Secret
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(secret.Object, &typedSecret); err != nil {
+		return nil, fmt.Errorf("failed to convert unstructured to typed secret: %w", err)
+	}
+
+	// Use the original decoding logic
+	return DecodeHelmSecret(&typedSecret, logger)
 }
