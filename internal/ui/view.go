@@ -154,6 +154,14 @@ func (m Model) renderStatusLine() string {
 
 	left := clusterStyle.Render(fmt.Sprintf("▶ %s", clusterName))
 
+	// Add error indicator if errors have been logged
+	if m.errorTracker != nil && m.errorTracker.HasErrors() {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			Bold(true)
+		left += "  " + errorStyle.Render(fmt.Sprintf("⚠ %d errors (see error.log)", m.errorTracker.GetErrorCount()))
+	}
+
 	// Build right side with resource type, update time, and refresh interval
 	rightParts := []string{
 		resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName)),
