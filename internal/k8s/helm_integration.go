@@ -4,83 +4,82 @@ import (
 	"fmt"
 	"time"
 
-	"helm.sh/helm/v3/pkg/release"
+	"github.com/miles-w-3/lobot/internal/helmutil"
 )
 
-// HelmClientInterface allows us to work with helm client without import cycle
-type HelmClientInterface interface {
-	ListReleases(namespace string, allNamespaces bool) ([]*release.Release, error)
-}
-
-// refreshHelmReleasesImpl is the actual implementation that uses the helm client
-func (im *InformerManager) refreshHelmReleasesImpl(helmClient HelmClientInterface) error {
-	if helmClient == nil {
-		return nil
-	}
-
-	// List all helm releases across all namespaces
-	releases, err := helmClient.ListReleases("", true)
-	if err != nil {
-		return err
-	}
-
-	// Convert to Resource objects
-	helmResources := make([]Resource, 0, len(releases))
-	for _, rel := range releases {
-		resource := convertReleaseToResource(rel)
-		helmResources = append(helmResources, resource)
-	}
-
-	im.mu.Lock()
-	im.helmResources = helmResources
-	im.mu.Unlock()
-	// im.logger.Debug("About to send update callback")
-	im.sendCallback(ServiceUpdate{Type: ServiceUpdateResources})
-	im.logger.Debug("Refreshed Helm releases", "count", len(helmResources))
-
-	return nil
-}
-
-// convertReleaseToResource converts a Helm release to a k8s.Resource for display
-// in the future, we could decouple the display from the k8s resource type
-func convertReleaseToResource(rel *release.Release) Resource {
+// convertHelmReleaseToTrackedObject converts a decoded Helm release to a TrackedObject
+func convertHelmReleaseToTrackedObject(rel *helmutil.HelmRelease) TrackedObject {
 	// Format chart name and version
 	chartName := "unknown"
-	if rel.Chart != nil && rel.Chart.Metadata != nil {
+	if rel.Chart.Metadata.Name != "" {
 		chartName = fmt.Sprintf("%s-%s", rel.Chart.Metadata.Name, rel.Chart.Metadata.Version)
 	}
 
 	// Calculate age
 	age := time.Duration(0)
-	if rel.Info != nil && !rel.Info.FirstDeployed.IsZero() {
-		age = time.Since(rel.Info.FirstDeployed.Time)
+	if !rel.Info.FirstDeployed.IsZero() {
+		age = time.Since(rel.Info.FirstDeployed)
 	}
 
-	// Get status
-	status := "unknown"
-	if rel.Info != nil {
-		status = rel.Info.Status.String()
+	return &HelmRelease{
+		CoreFields: CoreFields{
+			Name:      rel.Name,
+			Namespace: rel.Namespace,
+			Status:    rel.Info.Status,
+			Age:       age,
+			Raw:       nil, // Helm releases don't have a k8s object
+		},
+		HelmChart:    chartName,
+		HelmRevision: rel.Version,
+		HelmManifest: rel.Manifest,
+		GVR:          HelmReleaseResource.GVR,
+	}
+}
+
+// helmReleasesChanged checks if the Helm releases have actually changed
+func helmReleasesChanged(old, new []TrackedObject) bool {
+	if len(old) != len(new) {
+		return true
 	}
 
-	// Get manifest
-	manifest := ""
-	if rel.Manifest != "" {
-		manifest = rel.Manifest
+	// Create maps for comparison
+	oldMap := make(map[string]*HelmRelease)
+	for _, res := range old {
+		if helmRes, ok := res.(*HelmRelease); ok {
+			key := helmRes.GetNamespace() + "/" + helmRes.GetName()
+			oldMap[key] = helmRes
+		}
 	}
 
-	return Resource{
-		Name:          rel.Name,
-		Namespace:     rel.Namespace,
-		Kind:          "HelmRelease",
-		APIVersion:    "helm.sh/v3",
-		Status:        status,
-		Age:           age,
-		Labels:        nil, // Helm releases don't have labels in the traditional sense
-		Raw:           nil, // We don't have an unstructured.Unstructured for Helm releases
-		GVR:           HelmReleaseResource.GVR,
-		HelmChart:     chartName,
-		HelmRevision:  rel.Version,
-		HelmManifest:  manifest,
-		IsHelmRelease: true,
+	newMap := make(map[string]*HelmRelease)
+	for _, res := range new {
+		if helmRes, ok := res.(*HelmRelease); ok {
+			key := helmRes.GetNamespace() + "/" + helmRes.GetName()
+			newMap[key] = helmRes
+		}
 	}
+
+	// Check if any release is missing or different
+	for key, newRes := range newMap {
+		oldRes, exists := oldMap[key]
+		if !exists {
+			return true // New release
+		}
+
+		// Compare relevant fields
+		if oldRes.Status != newRes.Status ||
+			oldRes.HelmChart != newRes.HelmChart ||
+			oldRes.HelmRevision != newRes.HelmRevision {
+			return true // Release changed
+		}
+	}
+
+	// Check for deleted releases
+	for key := range oldMap {
+		if _, exists := newMap[key]; !exists {
+			return true // Release deleted
+		}
+	}
+
+	return false // No changes
 }

@@ -4,13 +4,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/bubbles/help"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
-	tree "github.com/savannahostrowski/tree-bubble"
 )
 
 // FocusPanel represents which panel is currently focused
@@ -21,64 +19,38 @@ const (
 	FocusDetails
 )
 
+// VisualizationMode represents the current visualization mode
+type VisualizationMode int
+
+const (
+	VisualizationModeTree VisualizationMode = iota
+	VisualizationModeGraph
+)
+
 // VisualizerModel represents the visualization mode component
 type VisualizerModel struct {
-	treeView        tree.Model
-	detailsViewport viewport.Model
+	mode            VisualizationMode
+	treeVisualizer  TreeVisualizerModel
+	graphVisualizer *GraphVisualizerModel
 	graph           *graph.ResourceGraph
 	width           int
 	height          int
-	detailsWidth    int
-	showDetails     bool
-	focusedPanel    FocusPanel
-	selectedNode    *graph.Node
-	rootResource    *k8s.Resource // The resource that triggered visualization
+	rootResource    k8s.TrackedObject // The resource that triggered visualization
 	keys            VisualizerModeKeyMap
 }
 
 // NewVisualizerModel creates a new visualizer model
 func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) VisualizerModel {
-	// Build tree nodes from graph, passing root for namespace context
-	treeNodes := buildTreeNodesFromGraph(resourceGraph)
-
-	// Calculate dimensions
-	detailsWidth := 40
-	treeWidth := width - detailsWidth - 4 // Account for borders and padding
-
-	// Create tree view with custom styles
-	treeView := tree.New(treeNodes, treeWidth, height-4)
-
-	// Apply custom styles to match application theme
-	treeView.Styles = tree.Styles{
-		Shapes: lipgloss.NewStyle().
-			Margin(0, 0, 0, 0).
-			Foreground(ColorSecondary), // Use consistent purple
-		Selected: lipgloss.NewStyle().
-			Margin(0, 0, 0, 0).
-			Background(ColorSecondary). // Use consistent purple background
-			Foreground(lipgloss.Color("#FFFFFF")), // White text for better visibility
-		Unselected: lipgloss.NewStyle().
-			Margin(0, 0, 0, 0).
-			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}),
-		Help: lipgloss.NewStyle().
-			Margin(0, 0, 0, 0).
-			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}),
-	}
-
-	// Create details viewport
-	detailsViewport := viewport.New(detailsWidth-4, height-8)
-	detailsViewport.SetContent("") // Will be populated in renderDetailsPanel
+	// Create tree visualizer (default mode)
+	treeVisualizer := NewTreeVisualizerModel(resourceGraph, width, height)
 
 	return VisualizerModel{
-		treeView:        treeView,
-		detailsViewport: detailsViewport,
+		mode:            VisualizationModeTree,
+		treeVisualizer:  treeVisualizer,
+		graphVisualizer: nil, // Lazy initialization
 		graph:           resourceGraph,
 		width:           width,
 		height:          height,
-		detailsWidth:    detailsWidth,
-		showDetails:     true,
-		focusedPanel:    FocusTree, // Start with tree focused
-		selectedNode:    resourceGraph.Root,
 		rootResource:    resourceGraph.Root.Resource,
 		keys:            DefaultVisualizerModeKeyMap(),
 	}
@@ -88,176 +60,64 @@ func NewVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) V
 func (m VisualizerModel) Update(msg tea.Msg) (VisualizerModel, tea.Cmd) {
 	var cmd tea.Cmd
 
+	// Check for mode toggle (Shift+G)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, m.keys.FocusLeft):
-			// Focus tree panel
-			if m.showDetails {
-				m.focusedPanel = FocusTree
-			}
-			return m, nil
-		case key.Matches(msg, m.keys.FocusRight):
-			// Focus details panel
-			if m.showDetails {
-				m.focusedPanel = FocusDetails
-			}
-			return m, nil
-		case key.Matches(msg, m.keys.ToggleDetails):
-			// Toggle details panel
-			m.showDetails = !m.showDetails
-			// If hiding details, focus must be on tree
-			if !m.showDetails {
-				m.focusedPanel = FocusTree
+		if msg.String() == "G" {
+			// Toggle between tree and graph mode
+			if m.mode == VisualizationModeTree {
+				// Lazy initialize graph visualizer
+				if m.graphVisualizer == nil {
+					m.graphVisualizer = NewGraphVisualizerModel(m.graph, m.width, m.height)
+				}
+				m.mode = VisualizationModeGraph
+			} else {
+				m.mode = VisualizationModeTree
 			}
 			return m, nil
 		}
+
+	case tea.WindowSizeMsg:
+		// Propagate size to both visualizers
+		m.width = msg.Width
+		m.height = msg.Height
+		if m.graphVisualizer != nil {
+			// Recreate graph visualizer with new size
+			m.graphVisualizer = NewGraphVisualizerModel(m.graph, m.width, m.height)
+		}
+		// Tree visualizer handles resize in its own Update
 	}
 
-	// Route navigation to the focused panel
-	if m.focusedPanel == FocusTree {
-		// Update tree view with all remaining messages
-		m.treeView, cmd = m.treeView.Update(msg)
-	} else if m.focusedPanel == FocusDetails && m.showDetails {
-		// Update details viewport (for scrolling)
-		m.detailsViewport, cmd = m.detailsViewport.Update(msg)
+	// Delegate to active visualizer
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		updated, cmd := m.graphVisualizer.Update(msg)
+		m.graphVisualizer = &updated
+		return m, cmd
 	}
 
+	// Default to tree visualizer
+	m.treeVisualizer, cmd = m.treeVisualizer.Update(msg)
 	return m, cmd
 }
 
 // View renders the visualizer
 func (m *VisualizerModel) View() string {
-	// Build the view layout
-	if m.showDetails {
-		// Split view: tree on left, details on right
-		treeView := m.renderTreeView()
-		detailsView := m.renderDetailsPanel()
-
-		return lipgloss.JoinHorizontal(
-			lipgloss.Top,
-			treeView,
-			detailsView,
-		)
+	// Delegate to active visualizer
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		return m.graphVisualizer.View()
 	}
-
-	// Full-width tree view
-	return m.renderTreeView()
+	return m.treeVisualizer.View()
 }
 
-// renderTreeView renders the tree visualization
-func (m *VisualizerModel) renderTreeView() string {
-	title := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary).
-		Render("▶ Resource Relationships")
-
-	treeWidth := m.width - m.detailsWidth - 4
-	if !m.showDetails {
-		treeWidth = m.width - 4
+// GetKeyMap returns the current visualizer's key map for help display
+func (m *VisualizerModel) GetKeyMap() help.KeyMap {
+	if m.mode == VisualizationModeGraph && m.graphVisualizer != nil {
+		return m.graphVisualizer.keys
 	}
-
-	// Highlight border if tree is focused
-	borderColor := ColorMuted
-	borderStyle := lipgloss.RoundedBorder()
-	if m.focusedPanel == FocusTree {
-		borderColor = ColorPrimary // Green when focused
-	}
-
-	treeBox := lipgloss.NewStyle().
-		Border(borderStyle).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(treeWidth).
-		Height(m.height - 4)
-
-	helpText := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Render("↑/↓/k/j: navigate • space: expand/collapse • ←/→/h/l: switch panel • d: toggle details • esc/q: exit")
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		title,
-		treeBox.Render(m.treeView.View()),
-		helpText,
-	)
+	return m.treeVisualizer.keys
 }
 
-// renderDetailsPanel renders the details panel for the selected resource
-func (m *VisualizerModel) renderDetailsPanel() string {
-	if m.selectedNode == nil {
-		return ""
-	}
-
-	res := m.selectedNode.Resource
-
-	// Build details content
-	var details strings.Builder
-	details.WriteString(lipgloss.NewStyle().Bold(true).Render("Resource Details"))
-	details.WriteString("\n\n")
-	details.WriteString(fmt.Sprintf("Name: %s\n", res.Name))
-	details.WriteString(fmt.Sprintf("Kind: %s\n", res.Kind))
-	if res.Namespace != "" {
-		details.WriteString(fmt.Sprintf("Namespace: %s\n", res.Namespace))
-	}
-	details.WriteString(fmt.Sprintf("Status: %s\n", res.Status))
-	// Show revision for Helm releases
-	if res.IsHelmRelease && res.HelmRevision > 0 {
-		details.WriteString(fmt.Sprintf("Revision: %d\n", res.HelmRevision))
-	}
-	details.WriteString(fmt.Sprintf("Age: %s\n", formatAge(res.Age)))
-
-	// Show owner references
-	if res.Raw != nil && len(res.Raw.GetOwnerReferences()) > 0 {
-		details.WriteString("\nOwned by:\n")
-		for _, owner := range res.Raw.GetOwnerReferences() {
-			details.WriteString(fmt.Sprintf("  • %s/%s\n", owner.Kind, owner.Name))
-		}
-	}
-
-	// Show labels if any
-	if len(res.Labels) > 0 {
-		details.WriteString("\nLabels:\n")
-		for key, value := range res.Labels {
-			details.WriteString(fmt.Sprintf("  %s: %s\n", key, truncate(value, 30)))
-		}
-	}
-
-	// Update viewport content
-	m.detailsViewport.SetContent(details.String())
-
-	// Highlight border if details panel is focused
-	borderColor := ColorMuted
-	if m.focusedPanel == FocusDetails {
-		borderColor = ColorPrimary // Green when focused
-	}
-
-	detailsBox := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(borderColor).
-		Padding(0, 1).
-		Width(m.detailsWidth).
-		Height(m.height - 4)
-
-	return detailsBox.Render(m.detailsViewport.View())
-}
-
-// buildTreeNodesFromGraph converts a resource graph into tree nodes for tree-bubble
-func buildTreeNodesFromGraph(resourceGraph *graph.ResourceGraph) []tree.Node {
-	// Find root nodes (nodes with no parents)
-	rootNodes := findRootNodes(resourceGraph)
-
-	// Build tree nodes recursively, passing root resource for context
-	var treeNodes []tree.Node
-	visited := make(map[*graph.Node]bool)
-
-	for _, rootNode := range rootNodes {
-		treeNode := buildTreeNode(resourceGraph, rootNode, resourceGraph.Root.Resource, visited)
-		treeNodes = append(treeNodes, treeNode)
-	}
-
-	return treeNodes
-}
+// Helper functions shared by visualizers
 
 // findRootNodes finds all nodes in the graph that have no parents
 func findRootNodes(resourceGraph *graph.ResourceGraph) []*graph.Node {
@@ -279,83 +139,22 @@ func findRootNodes(resourceGraph *graph.ResourceGraph) []*graph.Node {
 	return roots
 }
 
-// buildTreeNode recursively builds a tree node from a graph node
-func buildTreeNode(resourceGraph *graph.ResourceGraph, graphNode *graph.Node, rootResource *k8s.Resource, visited map[*graph.Node]bool) tree.Node {
-	// Prevent infinite loops
-	if visited[graphNode] {
-		return tree.Node{
-			Value: formatResourceNameWithRoot(graphNode, rootResource, true),
-			Desc:  "(circular reference)",
-		}
-	}
-	visited[graphNode] = true
-
-	// Get children
-	children := resourceGraph.GetChildren(graphNode)
-
-	// Build tree node
-	treeNode := tree.Node{
-		Value:    formatResourceNameWithRoot(graphNode, rootResource, graphNode.IsRoot),
-		Desc:     formatResourceDesc(graphNode),
-		Children: make([]tree.Node, 0, len(children)),
-	}
-
-	// Recursively build children
-	for _, child := range children {
-		childTreeNode := buildTreeNode(resourceGraph, child, rootResource, visited)
-		treeNode.Children = append(treeNode.Children, childTreeNode)
-	}
-
-	return treeNode
-}
-
-// formatResourceNameWithRoot formats a resource name for display in the tree
-func formatResourceNameWithRoot(node *graph.Node, rootResource *k8s.Resource, isRoot bool) string {
-	res := node.Resource
-	name := fmt.Sprintf("%s: %s", res.Kind, res.Name)
-
-	// Add namespace label if needed
-	nameWithNamespace := addNamespaceLabel(node, rootResource, name)
-
-	// Check if this is a missing resource
-	if node.Metadata["missing"] == "true" {
-		// Gray out missing resources
-		return lipgloss.NewStyle().
-			Foreground(ColorMuted).
-			Render("[Missing] " + nameWithNamespace)
-	}
-
-	// Highlight the root resource
-	if isRoot {
-		return lipgloss.NewStyle().
-			Bold(true).
-			Foreground(ColorWarning). // Yellow highlight for root
-			Render(nameWithNamespace + " ●")
-	}
-
-	// Color by resource kind
-	color := getColorForKind(res.Kind)
-	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(color)).
-		Render(nameWithNamespace)
-}
-
 // addNamespaceLabel adds a namespace label to the resource name if needed
-func addNamespaceLabel(node *graph.Node, rootResource *k8s.Resource, baseName string) string {
+func addNamespaceLabel(node *graph.Node, rootResource k8s.TrackedObject, baseName string) string {
 	// Don't add namespace for cluster-scoped resources
-	if node.Resource.Namespace == "" {
+	if node.Resource.GetNamespace() == "" {
 		return baseName
 	}
 
 	// For Helm releases: show namespace if different from release target namespace
-	if rootResource.IsHelmRelease {
-		if node.Resource.Namespace != rootResource.Namespace {
-			return fmt.Sprintf("%s (ns: %s)", baseName, node.Resource.Namespace)
+	if helmRes, ok := rootResource.(*k8s.HelmRelease); ok {
+		if node.Resource.GetNamespace() != helmRes.GetNamespace() {
+			return fmt.Sprintf("%s (ns: %s)", baseName, node.Resource.GetNamespace())
 		}
 	} else {
 		// For normal resources: show namespace if different from inspected resource
-		if !node.IsRoot && node.Resource.Namespace != rootResource.Namespace {
-			return fmt.Sprintf("%s (ns: %s)", baseName, node.Resource.Namespace)
+		if !node.IsRoot && node.Resource.GetNamespace() != rootResource.GetNamespace() {
+			return fmt.Sprintf("%s (ns: %s)", baseName, node.Resource.GetNamespace())
 		}
 	}
 
@@ -364,7 +163,7 @@ func addNamespaceLabel(node *graph.Node, rootResource *k8s.Resource, baseName st
 
 // formatResourceDesc formats the resource description (status indicator)
 func formatResourceDesc(node *graph.Node) string {
-	status := node.Resource.Status
+	status := node.Resource.GetStatus()
 	indicator := getStatusIndicator(status)
 
 	style := lipgloss.NewStyle()
@@ -385,6 +184,13 @@ func formatResourceDesc(node *graph.Node) string {
 	}
 
 	return style.Render(fmt.Sprintf("[%s] %s", status, indicator))
+}
+
+// formatResourceDescPlain formats the resource description without styling (for selected rows)
+func formatResourceDescPlain(node *graph.Node) string {
+	status := node.Resource.GetStatus()
+	indicator := getStatusIndicator(status)
+	return fmt.Sprintf("[%s] %s", status, indicator)
 }
 
 // getStatusIndicator returns a visual indicator for the status

@@ -7,7 +7,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/miles-w-3/lobot/internal/k8s"
-	"github.com/miles-w-3/lobot/internal/splash"
 )
 
 // SelectorType represents the type of selector
@@ -150,8 +149,8 @@ func (m *Model) getNamespacesFromResources() []string {
 	namespaceSet := make(map[string]bool)
 
 	for _, resource := range m.resources {
-		if resource.Namespace != "" {
-			namespaceSet[resource.Namespace] = true
+		if resource.GetNamespace() != "" {
+			namespaceSet[resource.GetNamespace()] = true
 		}
 	}
 
@@ -234,8 +233,8 @@ func (m *Model) getAllResourceTypes() []string {
 	discovered, err := m.resourceService.GetAllResourceTypes()
 	if err != nil {
 		// Fallback to default types if discovery fails
-		displayNames := make([]string, len(m.resourceTypes))
-		for i, rt := range m.resourceTypes {
+		displayNames := make([]string, len(m.trackedTypes))
+		for i, rt := range m.trackedTypes {
 			displayNames[i] = rt.DisplayName
 		}
 		return displayNames
@@ -259,10 +258,10 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 	}
 
 	// Find the resource type by display name
-	var selectedType *k8s.ResourceType
+	var selectedType *k8s.TrackedType
 	for i := range discovered {
 		if discovered[i].DisplayName == displayName {
-			selectedType = &discovered[i]
+			selectedType = discovered[i]
 			break
 		}
 	}
@@ -274,8 +273,8 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 
 	// Check if this type is already in our rotation
 	typeIndex := -1
-	for i := range m.resourceTypes {
-		if m.resourceTypes[i].GVR == selectedType.GVR {
+	for i := range m.trackedTypes {
+		if m.trackedTypes[i].GVR == selectedType.GVR {
 			typeIndex = i
 			break
 		}
@@ -291,36 +290,13 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 	}
 
 	// New type - add it to rotation and start informer
-	m.resourceTypes = append(m.resourceTypes, *selectedType)
-	m.currentType = len(m.resourceTypes) - 1
+	m.trackedTypes = append(m.trackedTypes, selectedType)
+	m.currentType = len(m.trackedTypes) - 1
 	m.selectedIndex = 0
 	m.scrollOffset = 0
 
 	// Start informer for this type with splash screen
-	return m.startInformerWithSplash(*selectedType)
+	return m.startInformerWithSplash(selectedType)
 }
 
-// startInformerWithSplash starts an informer and shows splash screen
-func (m *Model) startInformerWithSplash(resourceType k8s.ResourceType) tea.Cmd {
-	// Show splash screen
-	m.viewMode = ViewModeSplash
-	m.splash = splash.NewModel(m.logger)
-	m.splash.SetSize(m.width, m.height)
-	m.ready = false
 
-	// Return both the splash init command and the informer start command
-	return tea.Batch(
-		m.splash.Init(),
-		func() tea.Msg {
-			// Start the informer in background
-			err := m.resourceService.StartInformer(resourceType)
-			if err != nil {
-				// Error logged by service layer
-				// TODO: Show in modal!!!
-			}
-
-			// Send ready message
-			return ReadyMsg{}
-		},
-	)
-}

@@ -11,6 +11,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/ui"
+	"k8s.io/klog/v2"
 )
 
 func main() {
@@ -66,8 +67,18 @@ func run() error {
 	}
 	defer resourceService.Close()
 
+	// Create error tracker for logging errors to error.log
+	errorTracker, err := ui.NewErrorTracker()
+	if err != nil {
+		return fmt.Errorf("failed to create error tracker: %w", err)
+	}
+	defer errorTracker.Close()
+
+	// Redirect klog (client-go) output to our error tracker
+	klog.SetOutput(errorTracker)
+
 	// Create UI model
-	model := ui.NewModel(resourceService, logger)
+	model := ui.NewModel(resourceService, logger, errorTracker)
 
 	// Create Bubbletea program
 	p := tea.NewProgram(

@@ -16,7 +16,7 @@ import (
 // ResourceDiscovery handles discovering all available resource types in the cluster
 type ResourceDiscovery struct {
 	discoveryClient discovery.DiscoveryInterface
-	cache           []ResourceType
+	cache           []*TrackedType
 	lastRefresh     time.Time
 	mu              sync.RWMutex
 	logger          *slog.Logger
@@ -30,14 +30,14 @@ func NewResourceDiscovery(client *Client, logger *slog.Logger) *ResourceDiscover
 
 	return &ResourceDiscovery{
 		discoveryClient: client.Clientset.Discovery(),
-		cache:           []ResourceType{},
+		cache:           []*TrackedType{},
 		logger:          logger,
 	}
 }
 
 // DiscoverAllResources discovers all available resource types in the cluster
 // Returns both built-in types and CRDs, sorted alphabetically by display name
-func (rd *ResourceDiscovery) DiscoverAllResources() ([]ResourceType, error) {
+func (rd *ResourceDiscovery) DiscoverAllResources() ([]*TrackedType, error) {
 	rd.mu.Lock()
 	defer rd.mu.Unlock()
 
@@ -57,7 +57,7 @@ func (rd *ResourceDiscovery) DiscoverAllResources() ([]ResourceType, error) {
 		rd.logger.Debug("Discovery returned partial results", "error", err)
 	}
 
-	resourceMap := make(map[string]ResourceType)
+	resourceMap := make(map[string]*TrackedType)
 
 	for _, apiResourceList := range apiResourceLists {
 		// Parse group/version from GroupVersion string
@@ -98,16 +98,12 @@ func (rd *ResourceDiscovery) DiscoverAllResources() ([]ResourceType, error) {
 
 			// Use a unique key to avoid duplicates (prefer newer versions)
 			key := fmt.Sprintf("%s/%s", gv.Group, apiResource.Kind)
-			resourceMap[key] = ResourceType{
-				GVR:         gvr,
-				DisplayName: displayName,
-				Namespaced:  apiResource.Namespaced,
-			}
+			resourceMap[key] = NewTrackedType(gvr, displayName, apiResource.Namespaced)
 		}
 	}
 
 	// Convert map to slice
-	resources := make([]ResourceType, 0, len(resourceMap))
+	resources := make([]*TrackedType, 0, len(resourceMap))
 	for _, rt := range resourceMap {
 		resources = append(resources, rt)
 	}

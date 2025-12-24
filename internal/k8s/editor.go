@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
 )
@@ -21,22 +22,26 @@ type EditResult struct {
 
 // PrepareEditFile creates a temporary file with the resource YAML for editing
 // This should be called BEFORE suspending the TUI
-func (c *Client) PrepareEditFile(resource *Resource) (*EditResult, error) {
-	if resource == nil || resource.Raw == nil {
-		return nil, fmt.Errorf("invalid resource")
+// Only resources with Raw objects can be edited (not Helm releases)
+func (c *Client) PrepareEditFile(resource TrackedObject) (*EditResult, error) {
+	raw := resource.GetRaw()
+	if raw == nil {
+		return nil, fmt.Errorf("resource cannot be edited (no underlying Kubernetes object)")
 	}
 
-	c.Logger.Info("Preparing resource for editing", "name", resource.Name, "namespace", resource.Namespace, "kind", resource.Kind)
+	c.Logger.Info("Preparing resource for editing",
+		"name", resource.GetName(),
+		"namespace", resource.GetNamespace(),
+		"kind", resource.GetKind())
 
 	// Marshal resource to YAML
-	// Use the Object field from the Unstructured type
-	yamlBytes, err := yaml.Marshal(resource.Raw.Object)
+	yamlBytes, err := yaml.Marshal(raw.Object)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal resource to YAML: %w", err)
 	}
 
 	// Create temporary file
-	tmpfile, err := os.CreateTemp("", fmt.Sprintf("lobot-%s-%s-*.yaml", resource.Kind, resource.Name))
+	tmpfile, err := os.CreateTemp("", fmt.Sprintf("lobot-%s-%s-*.yaml", resource.GetKind(), resource.GetName()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temporary file: %w", err)
 	}
@@ -60,7 +65,7 @@ func (c *Client) PrepareEditFile(resource *Resource) (*EditResult, error) {
 
 // ProcessEditedFile reads, validates, and applies the edited resource
 // This should be called AFTER the editor exits
-func (c *Client) ProcessEditedFile(ctx context.Context, resource *Resource, editResult *EditResult) error {
+func (c *Client) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) error {
 	if editResult == nil {
 		return fmt.Errorf("invalid edit result")
 	}
@@ -104,7 +109,7 @@ func (c *Client) ProcessEditedFile(ctx context.Context, resource *Resource, edit
 }
 
 // ValidateEditedManifest validates that the edited manifest is a valid Kubernetes resource
-func (c *Client) ValidateEditedManifest(original *Resource, editedObj map[string]interface{}) error {
+func (c *Client) ValidateEditedManifest(original TrackedObject, editedObj map[string]interface{}) error {
 	// Check required fields
 	apiVersion, ok := editedObj["apiVersion"].(string)
 	if !ok || apiVersion == "" {
@@ -127,26 +132,27 @@ func (c *Client) ValidateEditedManifest(original *Resource, editedObj map[string
 	}
 
 	// Verify immutable fields haven't changed
-	if kind != original.Kind {
-		return fmt.Errorf("cannot change resource kind (original: %s, edited: %s)", original.Kind, kind)
+	if kind != original.GetKind() {
+		return fmt.Errorf("cannot change resource kind (original: %s, edited: %s)", original.GetKind(), kind)
 	}
 
-	if name != original.Name {
-		return fmt.Errorf("cannot change resource name (original: %s, edited: %s)", original.Name, name)
+	if name != original.GetName() {
+		return fmt.Errorf("cannot change resource name (original: %s, edited: %s)", original.GetName(), name)
 	}
 
 	// If namespaced, verify namespace hasn't changed
-	if original.Namespace != "" {
+	originalNs := original.GetNamespace()
+	if originalNs != "" {
 		namespace, _ := metadata["namespace"].(string)
-		if namespace != original.Namespace {
-			return fmt.Errorf("cannot change resource namespace (original: %s, edited: %s)", original.Namespace, namespace)
+		if namespace != originalNs {
+			return fmt.Errorf("cannot change resource namespace (original: %s, edited: %s)", originalNs, namespace)
 		}
 	}
 
 	// Ensure resourceVersion is preserved from original for optimistic locking
-	// This is critical for preventing conflicts
-	if original.Raw != nil {
-		if origMetadata, ok := original.Raw.Object["metadata"].(map[string]interface{}); ok {
+	raw := original.GetRaw()
+	if raw != nil {
+		if origMetadata, ok := raw.Object["metadata"].(map[string]interface{}); ok {
 			if resourceVersion, ok := origMetadata["resourceVersion"].(string); ok {
 				metadata["resourceVersion"] = resourceVersion
 				c.Logger.Debug("Preserved resourceVersion for optimistic locking", "version", resourceVersion)
@@ -159,7 +165,7 @@ func (c *Client) ValidateEditedManifest(original *Resource, editedObj map[string
 }
 
 // UpdateResource updates a Kubernetes resource with new content
-func (c *Client) UpdateResource(ctx context.Context, originalResource *Resource, editedObj map[string]interface{}) error {
+func (c *Client) UpdateResource(ctx context.Context, originalResource TrackedObject, editedObj map[string]interface{}) error {
 	// Create dynamic client
 	dynamicClient, err := dynamic.NewForConfig(c.Config)
 	if err != nil {
@@ -170,20 +176,30 @@ func (c *Client) UpdateResource(ctx context.Context, originalResource *Resource,
 	unstructuredObj := &unstructured.Unstructured{Object: editedObj}
 
 	// Get GVR (GroupVersionResource) from the resource
-	gvr := originalResource.GVR
+	// Both K8sResource and ArgoCDApp have GVR fields
+	var gvr schema.GroupVersionResource
+	switch res := originalResource.(type) {
+	case *K8sResource:
+		gvr = res.GVR
+	case *ArgoCDApp:
+		gvr = res.GVR
+	default:
+		return fmt.Errorf("resource type %T cannot be edited", originalResource)
+	}
 
 	// Get resource interface
 	var resourceInterface dynamic.ResourceInterface
-	if originalResource.Namespace != "" {
-		resourceInterface = dynamicClient.Resource(gvr).Namespace(originalResource.Namespace)
+	namespace := originalResource.GetNamespace()
+	if namespace != "" {
+		resourceInterface = dynamicClient.Resource(gvr).Namespace(namespace)
 	} else {
 		resourceInterface = dynamicClient.Resource(gvr)
 	}
 
 	c.Logger.Debug("Updating resource",
 		"gvr", gvr.String(),
-		"name", originalResource.Name,
-		"namespace", originalResource.Namespace)
+		"name", originalResource.GetName(),
+		"namespace", namespace)
 
 	// Update the resource
 	_, err = resourceInterface.Update(ctx, unstructuredObj, metav1.UpdateOptions{})
