@@ -105,8 +105,12 @@ func flattenGraphForNavigation(layout *GraphLayout) []*graph.Node {
 
 // updateViewportContent renders the graph and updates the viewport
 func (m *GraphVisualizerModel) updateViewportContent() {
+	phaseStart := time.Now()
+
 	// 1. Create background canvas with edge lines
 	canvas := NewCanvas(m.canvasWidth, m.canvasHeight)
+	log.Printf("[GraphVisualizer] Phase 1 - Canvas creation: %v", time.Since(phaseStart))
+	phaseStart = time.Now()
 
 	for _, edge := range m.graph.Edges {
 		fromPos, fromExists := m.layout.nodePositions[edge.From]
@@ -115,9 +119,13 @@ func (m *GraphVisualizerModel) updateViewportContent() {
 			canvas.DrawEdge(fromPos, toPos)
 		}
 	}
+	log.Printf("[GraphVisualizer] Phase 2 - Edge drawing (%d edges): %v", len(m.graph.Edges), time.Since(phaseStart))
+	phaseStart = time.Now()
 
 	// 2. Get canvas lines as the base
 	lines := canvas.Lines()
+	log.Printf("[GraphVisualizer] Phase 3 - Canvas to lines: %v", time.Since(phaseStart))
+	phaseStart = time.Now()
 
 	// 3. Overlay styled boxes onto canvas lines
 	for i, node := range m.flattenedNodes {
@@ -138,14 +146,25 @@ func (m *GraphVisualizerModel) updateViewportContent() {
 			}
 		}
 	}
+	log.Printf("[GraphVisualizer] Phase 4 - Box overlay (%d nodes): %v", len(m.flattenedNodes), time.Since(phaseStart))
+	phaseStart = time.Now()
 
 	// 4. Set the full content on the 2D viewport
 	m.viewport2d.SetLines(lines)
+	log.Printf("[GraphVisualizer] Phase 5 - Viewport SetLines: %v", time.Since(phaseStart))
+	phaseStart = time.Now()
+
+	// Ensure selected node is visible
+	if m.selectedIndex >= 0 && m.selectedIndex < len(m.flattenedNodes) {
+		node := m.flattenedNodes[m.selectedIndex]
+		if pos, exists := m.layout.nodePositions[node]; exists {
+			m.viewport2d.EnsureVisible(pos.X, pos.Y, pos.Width, pos.Height)
+		}
+	}
 
 	// 5. Update details panel for selected node
-	if m.selectedIndex >= 0 && m.selectedIndex < len(m.flattenedNodes) {
-		m.updateDetailsPanel(m.graph.Root)
-	}
+	m.updateDetailsPanel(m.graph.Root)
+	log.Printf("[GraphVisualizer] Phase 6 - Details panel & visibility: %v", time.Since(phaseStart))
 }
 
 // renderNodeBox renders a single node as a Lipgloss box

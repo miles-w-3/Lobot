@@ -130,7 +130,7 @@ var (
 				{Title: "NAMESPACE", Width: 15},
 				{Title: "STATUS", Width: 12},
 				{Title: "CHART", Width: 25},
-				{Title: "REV", Width: 5}, // Revision column - TODO: can make non-latest revisions togglable
+				{Title: "REV", Width: 5},
 			},
 			rowBinder: nil, // Use default (DefaultRowBinding on HelmRelease)
 		},
@@ -836,31 +836,57 @@ func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp
 		helmResources = append(helmResources, helmResource)
 	}
 
+	// Filter to keep only the latest revision of each release
+	// Group by namespace/name, keep highest revision
+	latestRevisions := make(map[string]TrackedObject)
+	for _, res := range helmResources {
+		helmRel, ok := res.(*HelmRelease)
+		if !ok {
+			continue
+		}
+		key := helmRel.Namespace + "/" + helmRel.Name
+		if existing, exists := latestRevisions[key]; exists {
+			existingRel := existing.(*HelmRelease)
+			if helmRel.HelmRevision > existingRel.HelmRevision {
+				latestRevisions[key] = helmRel
+			}
+		} else {
+			latestRevisions[key] = helmRel
+		}
+	}
+
+	// Convert back to slice
+	filteredResources := make([]TrackedObject, 0, len(latestRevisions))
+	for _, res := range latestRevisions {
+		filteredResources = append(filteredResources, res)
+	}
+
 	im.logger.Debug("Helm release enumeration complete",
 		"helmSecretsFound", helmSecretCount,
-		"releasesDecoded", len(helmResources))
+		"releasesDecoded", len(helmResources),
+		"uniqueReleases", len(filteredResources))
 
 	// Update the cache and notify if changed
 	im.mu.Lock()
 	oldHelmResources := im.helmResources
 
-	changed := helmReleasesChanged(oldHelmResources, helmResources)
+	changed := helmReleasesChanged(oldHelmResources, filteredResources)
 
 	if changed {
-		im.helmResources = helmResources
+		im.helmResources = filteredResources
 		im.lastUpdateTime[HelmReleaseResource.GVR] = time.Now()
 		im.mu.Unlock()
 
 		im.sendCallback(ServiceUpdate{Type: ServiceUpdateResources})
-		im.logger.Debug("Helm releases changed", "count", len(helmResources))
+		im.logger.Debug("Helm releases changed", "count", len(filteredResources))
 	} else if forceUpdateTimestamp {
 		// User explicitly refreshed, update timestamp even if data hasn't changed
 		im.lastUpdateTime[HelmReleaseResource.GVR] = time.Now()
 		im.mu.Unlock()
-		im.logger.Debug("Helm releases unchanged but timestamp updated", "count", len(helmResources))
+		im.logger.Debug("Helm releases unchanged but timestamp updated", "count", len(filteredResources))
 	} else {
 		im.mu.Unlock()
-		im.logger.Debug("Helm releases unchanged", "count", len(helmResources))
+		im.logger.Debug("Helm releases unchanged", "count", len(filteredResources))
 	}
 
 	return nil
@@ -885,41 +911,78 @@ func (im *InformerManager) sendCallback(callbackDetails ServiceUpdate) {
 }
 
 // FetchResourcesByLabel fetches resources matching a label selector from the API server.
-// This uses server-side label filtering for efficiency (labels are indexed by Kubernetes).
-// It queries all resource types from DefaultResourceTypes() and aggregates results.
+// This uses server-side label filtering and queries ALL resource types in the cluster
+// (including CRDs like Argo Rollouts) via the discovery API.
+// Queries are parallelized for performance.
 func (im *InformerManager) FetchResourcesByLabel(ctx context.Context, labelSelector string) []TrackedObject {
+	im.logger.Debug("Fetching resources by label using discovery", "selector", labelSelector)
+
+	// Use discovery API to get ALL resource types in the cluster (including CRDs)
+	discovery := NewResourceDiscovery(im.client, im.logger)
+	resourceTypes, err := discovery.DiscoverAllResources()
+	if err != nil {
+		im.logger.Warn("Discovery failed, falling back to default types", "error", err)
+		resourceTypes = DefaultResourceTypes()
+	}
+
+	im.logger.Debug("Discovered resource types for label query", "count", len(resourceTypes))
+
+	// Parallel query with worker pool
+	type result struct {
+		resources []TrackedObject
+	}
+
+	resultCh := make(chan result, len(resourceTypes))
+	var wg sync.WaitGroup
+
+	// Limit concurrent API calls to avoid overwhelming the API server
+	semaphore := make(chan struct{}, 10)
+
+	for _, rt := range resourceTypes {
+		wg.Add(1)
+		go func(rt *TrackedType) {
+			defer wg.Done()
+
+			semaphore <- struct{}{}        // Acquire
+			defer func() { <-semaphore }() // Release
+
+			// Use label selector for server-side filtering (efficient, indexed by k8s)
+			list, err := im.dynamicClient.Resource(rt.GVR).Namespace("").List(ctx, metav1.ListOptions{
+				LabelSelector: labelSelector,
+			})
+
+			if err != nil {
+				// Many resource types may not be accessible - this is normal
+				return
+			}
+
+			var resources []TrackedObject
+			for _, item := range list.Items {
+				resource := ConvertUnstructuredToTrackedObject(&item, rt.GVR)
+				resources = append(resources, resource)
+			}
+
+			if len(resources) > 0 {
+				resultCh <- result{resources: resources}
+			}
+		}(rt)
+	}
+
+	// Close channel when all workers are done
+	go func() {
+		wg.Wait()
+		close(resultCh)
+	}()
+
+	// Collect results
 	var allResources []TrackedObject
-
-	im.logger.Debug("Fetching resources by label", "selector", labelSelector)
-
-	// Query each resource type with the label selector
-	for _, rt := range DefaultResourceTypes() {
-		// Skip pseudo-resources (Helm, ArgoCD Applications)
-		if rt.DisplayName == "Helm Releases" || rt.DisplayName == "ArgoCD Applications" {
-			continue
-		}
-
-		// Use label selector for server-side filtering (efficient, indexed)
-		list, err := im.dynamicClient.Resource(rt.GVR).Namespace("").List(ctx, metav1.ListOptions{
-			LabelSelector: labelSelector,
-		})
-
-		if err != nil {
-			im.logger.Debug("Failed to list resources with label selector",
-				"gvr", rt.GVR.String(),
-				"selector", labelSelector,
-				"error", err)
-			continue
-		}
-
-		for _, item := range list.Items {
-			resource := ConvertUnstructuredToTrackedObject(&item, rt.GVR)
-			allResources = append(allResources, resource)
-		}
+	for r := range resultCh {
+		allResources = append(allResources, r.resources...)
 	}
 
 	im.logger.Debug("Label selector query complete",
 		"selector", labelSelector,
+		"resourceTypes", len(resourceTypes),
 		"resourcesFound", len(allResources))
 
 	return allResources
