@@ -126,10 +126,11 @@ var (
 		true,
 		TableParams{
 			columnOverride: []table.Column{
-				{Title: "NAME", Width: 30},
-				{Title: "NAMESPACE", Width: 20},
-				{Title: "STATUS", Width: 15},
-				{Title: "VERSION", Width: 30},
+				{Title: "NAME", Width: 25},
+				{Title: "NAMESPACE", Width: 15},
+				{Title: "STATUS", Width: 12},
+				{Title: "CHART", Width: 25},
+				{Title: "REV", Width: 5}, // Revision column - TODO: can make non-latest revisions togglable
 			},
 			rowBinder: nil, // Use default (DefaultRowBinding on HelmRelease)
 		},
@@ -881,4 +882,45 @@ func (im *InformerManager) sendCallback(callbackDetails ServiceUpdate) {
 	} else {
 		im.logger.Debug("Not sending update callback")
 	}
+}
+
+// FetchResourcesByLabel fetches resources matching a label selector from the API server.
+// This uses server-side label filtering for efficiency (labels are indexed by Kubernetes).
+// It queries all resource types from DefaultResourceTypes() and aggregates results.
+func (im *InformerManager) FetchResourcesByLabel(ctx context.Context, labelSelector string) []TrackedObject {
+	var allResources []TrackedObject
+
+	im.logger.Debug("Fetching resources by label", "selector", labelSelector)
+
+	// Query each resource type with the label selector
+	for _, rt := range DefaultResourceTypes() {
+		// Skip pseudo-resources (Helm, ArgoCD Applications)
+		if rt.DisplayName == "Helm Releases" || rt.DisplayName == "ArgoCD Applications" {
+			continue
+		}
+
+		// Use label selector for server-side filtering (efficient, indexed)
+		list, err := im.dynamicClient.Resource(rt.GVR).Namespace("").List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector,
+		})
+
+		if err != nil {
+			im.logger.Debug("Failed to list resources with label selector",
+				"gvr", rt.GVR.String(),
+				"selector", labelSelector,
+				"error", err)
+			continue
+		}
+
+		for _, item := range list.Items {
+			resource := ConvertUnstructuredToTrackedObject(&item, rt.GVR)
+			allResources = append(allResources, resource)
+		}
+	}
+
+	im.logger.Debug("Label selector query complete",
+		"selector", labelSelector,
+		"resourcesFound", len(allResources))
+
+	return allResources
 }

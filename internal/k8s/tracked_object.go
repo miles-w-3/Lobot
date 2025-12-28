@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/charmbracelet/bubbles/table"
@@ -91,10 +92,11 @@ func (h *HelmRelease) GetKind() string                    { return "HelmRelease"
 
 func (h *HelmRelease) DefaultRowBinding() table.Row {
 	return table.Row{
-		util.Truncate(h.Name, 30),
-		util.Truncate(h.Namespace, 20),
+		util.Truncate(h.Name, 25),
+		util.Truncate(h.Namespace, 15),
 		h.Status,
-		h.HelmChart,
+		util.Truncate(h.HelmChart, 25),
+		fmt.Sprintf("%d", h.HelmRevision),
 	}
 }
 

@@ -2,7 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"log"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -35,21 +37,30 @@ type GraphVisualizerModel struct {
 
 // NewGraphVisualizerModel creates a new graph visualizer
 func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) *GraphVisualizerModel {
+	initStart := time.Now()
+
 	detailsWidth := 35
 	graphWidth := width - detailsWidth - 2
 
-	// Calculate layout
+	// Calculate layout with timing
+	layoutStart := time.Now()
 	layout := NewGraphLayout()
 	layout.Calculate(resourceGraph, graphWidth-4)
+	log.Printf("[GraphVisualizer] Layout calculation: duration=%v nodes=%d layers=%d",
+		time.Since(layoutStart), len(resourceGraph.Nodes), len(layout.layers))
 
 	// Calculate canvas dimensions - ensure enough space for all content
 	canvasWidth := max(layout.maxLayerWidth+2*marginLeft, graphWidth-4)
 	canvasHeight := layout.totalHeight
+	log.Printf("[GraphVisualizer] Canvas dimensions: width=%d height=%d (estimated memory: %d KB)",
+		canvasWidth, canvasHeight, (canvasWidth*canvasHeight*4)/1024)
 
 	// Create viewports
+	viewportStart := time.Now()
 	viewportHeight := height - 8
 	graphViewport := NewViewport2D(graphWidth-4, viewportHeight)
 	detailsViewport := viewport.New(detailsWidth-4, viewportHeight)
+	log.Printf("[GraphVisualizer] Viewport creation: duration=%v", time.Since(viewportStart))
 
 	// Flatten nodes for navigation (layer by layer, left to right)
 	flattenedNodes := flattenGraphForNavigation(layout)
@@ -73,7 +84,11 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 		help:            help.New(),
 	}
 
+	contentStart := time.Now()
 	model.updateViewportContent()
+	log.Printf("[GraphVisualizer] Content rendering: duration=%v", time.Since(contentStart))
+
+	log.Printf("[GraphVisualizer] Total initialization: duration=%v", time.Since(initStart))
 	return model
 }
 

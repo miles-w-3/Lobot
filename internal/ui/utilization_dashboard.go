@@ -12,6 +12,21 @@ import (
 	"github.com/miles-w-3/lobot/internal/k8s"
 )
 
+// podColors defines a consistent color palette for pod visualization.
+// Defined at package level to avoid reallocation on each render call.
+var podColors = []lipgloss.Color{
+	lipgloss.Color("#00D4AA"), // teal
+	lipgloss.Color("#7C6BEE"), // purple
+	lipgloss.Color("#FF6B9D"), // pink
+	lipgloss.Color("#FFD93D"), // yellow
+	lipgloss.Color("#6BCB77"), // green
+	lipgloss.Color("#4D96FF"), // blue
+	lipgloss.Color("#FF8C42"), // orange
+	lipgloss.Color("#C9485B"), // red
+	lipgloss.Color("#98D8AA"), // light green
+	lipgloss.Color("#C4B7CB"), // lavender
+}
+
 // ResourceCategory represents the resource type being viewed
 type ResourceCategory int
 
@@ -505,20 +520,6 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	node := m.getSelectedNode()
 	isAllNodes := node == nil // <All Nodes> is selected
 
-	// Define color palette for pods (vibrant, distinct colors)
-	podColors := []lipgloss.Color{
-		lipgloss.Color("#00D4AA"), // teal
-		lipgloss.Color("#7C6BEE"), // purple
-		lipgloss.Color("#FF6B9D"), // pink
-		lipgloss.Color("#FFD93D"), // yellow
-		lipgloss.Color("#6BCB77"), // green
-		lipgloss.Color("#4D96FF"), // blue
-		lipgloss.Color("#FF8C42"), // orange
-		lipgloss.Color("#C9485B"), // red
-		lipgloss.Color("#98D8AA"), // light green
-		lipgloss.Color("#C4B7CB"), // lavender
-	}
-
 	// Build modal content
 	var content strings.Builder
 
@@ -591,7 +592,7 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	if cpuTotalMillis > 0 {
 		cpuPercent = float64(cpuUsedMillis) / float64(cpuTotalMillis) * 100
 	}
-	content.WriteString(fmt.Sprintf("  %s %.2f / %.2f cores (%.1f%%)\n",
+	content.WriteString(fmt.Sprintf("%s %.2f / %.2f cores (%.1f%%)\n",
 		labelStyle.Render("CPU:"),
 		float64(cpuUsedMillis)/1000,
 		float64(cpuTotalMillis)/1000,
@@ -682,18 +683,23 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	)
 }
 
-// renderStackedBarWithSelection renders a stacked bar with white outline around selected segment
+// renderStackedBarWithSelection renders a stacked bar with white pointer under selected segment
 func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpuTotal int64, memTotal int64, colors []lipgloss.Color) (string, string) {
 	if len(m.modalPods) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(ColorMuted)
-		bar := "  [" + emptyStyle.Render(strings.Repeat("▒", width)) + "]"
+		bar := "[" + emptyStyle.Render(strings.Repeat("▒", width)) + "]"
 		return bar, ""
 	}
 
 	var bar strings.Builder
-	bar.WriteString("  [")
+	var selectionLine strings.Builder
+	bar.WriteString("[")
+	selectionLine.WriteString(" ") // One space to align with "["
 
 	usedWidth := 0
+	selectedStart := -1
+	selectedWidth := 0
+
 	for i, pod := range m.modalPods {
 		var percentage float64
 		if m.resourceCategory == ResourceCategoryCPU {
@@ -719,13 +725,15 @@ func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpu
 			colorIdx := i % len(colors)
 			isSelected := i == m.modalSelectedPod
 
-			segmentStyle := lipgloss.NewStyle().Foreground(colors[colorIdx])
+			// Track selected segment position for underline indicator
 			if isSelected {
-				// TODO: Cleaner way to show items? maybe italics?
-				bar.WriteString(segmentStyle.Render(strings.Repeat("▓", segmentWidth)))
-			} else {
-				bar.WriteString(segmentStyle.Render(strings.Repeat("█", segmentWidth)))
+				selectedStart = usedWidth
+				selectedWidth = segmentWidth
 			}
+
+			// All bars use solid block character
+			segmentStyle := lipgloss.NewStyle().Foreground(colors[colorIdx])
+			bar.WriteString(segmentStyle.Render(strings.Repeat("█", segmentWidth)))
 			usedWidth += segmentWidth
 		}
 	}
@@ -738,7 +746,24 @@ func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpu
 
 	bar.WriteString("]")
 
-	return bar.String(), "" // No selection line needed
+	// Build selection indicator line with white pointer under selected segment
+	if selectedStart >= 0 && selectedWidth > 0 {
+		// Add spaces up to selected segment
+		selectionLine.WriteString(strings.Repeat(" ", selectedStart))
+		// Add pointer character centered under the segment
+		pointerStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF")).Bold(true)
+		if selectedWidth >= 3 {
+			// Center the pointer for wider segments
+			padding := (selectedWidth - 1) / 2
+			selectionLine.WriteString(strings.Repeat(" ", padding))
+			selectionLine.WriteString(pointerStyle.Render("▲"))
+		} else {
+			// Just show pointer for narrow segments
+			selectionLine.WriteString(pointerStyle.Render("▲"))
+		}
+	}
+
+	return bar.String(), selectionLine.String()
 }
 
 // renderStackedBar renders a single stacked bar with color-coded segments

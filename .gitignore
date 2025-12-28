@@ -1,5 +1,5 @@
 # Debug logs
-out.log
+*.log
 
 # Binary
 /lobot
