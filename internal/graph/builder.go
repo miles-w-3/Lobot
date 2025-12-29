@@ -20,8 +20,6 @@ type ResourceProvider interface {
 	GetResourcesByOwnerUID(uid string) []k8s.TrackedObject
 	FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) k8s.TrackedObject
 	DiscoverResourceName(gv schema.GroupVersion, kind string) (string, error)
-	// FetchResourcesByLabel fetches all resources across all namespaces matching a label selector.
-	FetchResourcesByLabel(labelSelector string) []k8s.TrackedObject
 }
 
 // Builder builds resource graphs by discovering relationships

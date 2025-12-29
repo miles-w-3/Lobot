@@ -133,12 +133,6 @@ func (svc *ResourceService) DiscoverResourceName(gv schema.GroupVersion, kind st
 	return svc.discovery.DiscoverResourceName(gv, kind)
 }
 
-// FetchResourcesByLabel fetches all resources matching a label selector across all namespaces.
-// This uses an API call with server-side label filtering (efficient, indexed by k8s).
-func (svc *ResourceService) FetchResourcesByLabel(labelSelector string) []TrackedObject {
-	return svc.informer.FetchResourcesByLabel(svc.ctx, labelSelector)
-}
-
 // GetAllResourceTypes discovers all available resource types in the cluster
 func (svc *ResourceService) GetAllResourceTypes() ([]*TrackedType, error) {
 	return svc.discovery.DiscoverAllResources()

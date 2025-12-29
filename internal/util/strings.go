@@ -10,7 +10,7 @@ func FormatAge(duration time.Duration) string {
 		return fmt.Sprintf("%ds", int(duration.Seconds()))
 	} else if duration < time.Hour {
 		return fmt.Sprintf("%dm", int(duration.Minutes()))
-	} else if duration < 24*time.Hour {
+	} else if duration < 48*time.Hour {
 		return fmt.Sprintf("%dh", int(duration.Hours()))
 	} else {
 		return fmt.Sprintf("%dd", int(duration.Hours()/24))

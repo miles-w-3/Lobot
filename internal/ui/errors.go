@@ -99,8 +99,13 @@ func (e *ErrorTracker) Write(p []byte) (n int, err error) {
 	defer e.mu.Unlock()
 
 	// Check if this looks like a warning or error (klog format)
+	// Use case-insensitive matching to catch all variations
+	// Exclude "throttling" as these are normal operational messages, not errors
 	msg := string(p)
-	if strings.Contains(msg, "Warning") || strings.Contains(msg, "Error") || strings.Contains(msg, "error") {
+	lowerMsg := strings.ToLower(msg)
+	if (strings.Contains(lowerMsg, "warning") && !strings.Contains(lowerMsg, "throttling")) ||
+		strings.Contains(lowerMsg, "error") ||
+		strings.Contains(lowerMsg, "failed") {
 		e.hasErrors = true
 		e.errorCount++
 	}

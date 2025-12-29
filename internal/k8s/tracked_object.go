@@ -63,13 +63,13 @@ func (k *K8sResource) DefaultRowBinding() table.Row {
 			util.Truncate(k.Name, 40),
 			util.Truncate(k.Namespace, 20),
 			k.Status,
-			k.Age.String(),
+			util.FormatAge(k.Age),
 		}
 	}
 	return table.Row{
 		util.Truncate(k.Name, 60),
 		k.Status,
-		k.Age.String(),
+		util.FormatAge(k.Age),
 	}
 }
 

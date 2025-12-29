@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -54,6 +55,31 @@ func run() error {
 		cancel()
 	}()
 
+	// Create error tracker for logging errors to error.log
+	errorTracker, err := ui.NewErrorTracker()
+	if err != nil {
+		return fmt.Errorf("failed to create error tracker: %w", err)
+	}
+	defer errorTracker.Close()
+
+	// Redirect klog (client-go) output to our error tracker
+	// We must also disable logging to stderr which klog does by default
+	// This prevents "Throttling request" messages from breaking the TUI
+	klog.SetOutput(errorTracker)
+
+	// Configure klog flags to avoid writing to stderr
+	// We need to use the flag package to set these as klog uses flags
+	// Note: We ignore errors here as flags might be already parsed/set
+	// Set stderrthreshold to FATAL so only fatal errors go to stderr (if any)
+	// Set logtostderr to false
+	// We use direct flag manipulation for klog
+	// Make sure to import "flag"
+	fs := flag.NewFlagSet("", flag.ContinueOnError)
+	klog.InitFlags(fs)
+	fs.Set("logtostderr", "false")
+	fs.Set("stderrthreshold", "FATAL") // Only FATAL logs go to stderr
+	fs.Set("alsologtostderr", "false")
+
 	// Initialize Kubernetes client
 	client, err := k8s.NewClient(logger)
 	if err != nil {
@@ -66,16 +92,6 @@ func run() error {
 		return fmt.Errorf("failed to create resource service: %w", err)
 	}
 	defer resourceService.Close()
-
-	// Create error tracker for logging errors to error.log
-	errorTracker, err := ui.NewErrorTracker()
-	if err != nil {
-		return fmt.Errorf("failed to create error tracker: %w", err)
-	}
-	defer errorTracker.Close()
-
-	// Redirect klog (client-go) output to our error tracker
-	klog.SetOutput(errorTracker)
 
 	// Create UI model
 	model := ui.NewModel(resourceService, logger, errorTracker)

@@ -2,10 +2,13 @@ package graph
 
 import (
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // BuildArgoGraph builds a graph for an ArgoCD Application showing all managed resources
-// Uses API label selector for first level (efficient, server-side indexed), then owner references for deeper levels
+// Uses the ArgoCD Application's .status.resources field for discovery
 func (b *Builder) BuildArgoGraph(app k8s.TrackedObject) *ResourceGraph {
 	graph := NewResourceGraph(app)
 
@@ -13,34 +16,112 @@ func (b *Builder) BuildArgoGraph(app k8s.TrackedObject) *ResourceGraph {
 		"name", app.GetName(),
 		"namespace", app.GetNamespace())
 
-	// Use API call with server-side label filtering
-	// The argocd.argoproj.io/instance label is indexed by Kubernetes for efficient queries
-	labelSelector := "argocd.argoproj.io/instance=" + app.GetName()
-	managedResources := b.provider.FetchResourcesByLabel(labelSelector)
+	argoApp, ok := app.(*k8s.ArgoCDApp)
+	if !ok || argoApp.GetRaw() == nil {
+		b.logger.Debug("Failed to get raw ArgoCD Application object")
+		return graph
+	}
 
-	b.logger.Debug("Found ArgoCD managed resources via label selector",
+	obj := argoApp.GetRaw()
+
+	status, found, err := unstructured.NestedFieldCopy(obj.Object, "status")
+	if !found || err != nil {
+		b.logger.Debug("ArgoCD Application has no status field or error reading it", "error", err)
+		return graph
+	}
+
+	statusMap, ok := status.(map[string]interface{})
+	if !ok {
+		b.logger.Debug("ArgoCD Application status is not a map")
+		return graph
+	}
+
+	var appStatus k8s.ApplicationStatus
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(statusMap, &appStatus); err != nil {
+		b.logger.Debug("Failed to unmarshal ArgoCD Application status", "error", err)
+		return graph
+	}
+
+	if len(appStatus.Resources) == 0 {
+		b.logger.Debug("ArgoCD Application has no resources in status", "name", app.GetName())
+		return graph
+	}
+
+	b.logger.Debug("Found resources in ArgoCD Application status",
 		"application", app.GetName(),
-		"selector", labelSelector,
-		"count", len(managedResources))
+		"count", len(appStatus.Resources))
 
-	// For each managed resource, add it to the graph and traverse its ownership chain
 	visited := make(map[string]bool)
-	visited[string(app.GetRaw().GetUID())] = true
+	visited[string(obj.GetUID())] = true
 
-	for i := range managedResources {
-		resource := managedResources[i]
-
-		// Skip if already visited (shouldn't happen at this level)
-		if visited[string(resource.GetRaw().GetUID())] {
-			continue
+	for _, resourceStatus := range appStatus.Resources {
+		gv := schema.GroupVersion{
+			Group:   resourceStatus.Group,
+			Version: resourceStatus.Version,
 		}
 
-		// Add the managed resource to graph
-		node := graph.AddNode(resource, RelationshipArgo)
-		graph.AddEdge(graph.Root, node, EdgeTypeArgoApp)
+		cacheKey := gv.String() + "/" + resourceStatus.Kind
+		var gvr schema.GroupVersionResource
 
-		// Recursively traverse owned resources (Pods owned by Deployments, etc.)
-		b.traverseOwned(graph, node, visited, 0)
+		if cachedGVR, exists := b.kindToGVR[cacheKey]; exists {
+			gvr = cachedGVR
+		} else {
+			resourceName, err := b.discoverResourceName(gv, resourceStatus.Kind)
+			if err != nil {
+				b.logger.Debug("Failed to discover resource name",
+					"kind", resourceStatus.Kind,
+					"gv", gv.String(),
+					"error", err)
+				continue
+			}
+
+			gvr = schema.GroupVersionResource{
+				Group:    gv.Group,
+				Version:  gv.Version,
+				Resource: resourceName,
+			}
+
+			b.kindToGVR[cacheKey] = gvr
+		}
+
+		var actualResource k8s.TrackedObject
+
+		cachedResources := b.provider.GetResources(gvr)
+		for i := range cachedResources {
+			res := cachedResources[i]
+			if res.GetName() == resourceStatus.Name &&
+				res.GetNamespace() == resourceStatus.Namespace {
+				actualResource = res
+				break
+			}
+		}
+
+		if actualResource == nil {
+			actualResource = b.provider.FetchResource(gvr, resourceStatus.Name, resourceStatus.Namespace, "")
+		}
+
+		if actualResource != nil {
+			node := graph.AddNode(actualResource, RelationshipArgo)
+			graph.AddEdge(graph.Root, node, EdgeTypeArgoApp)
+			b.traverseOwned(graph, node, visited, 0)
+		} else {
+			missingRes := &k8s.K8sResource{
+				CoreFields: k8s.CoreFields{
+					Name:      resourceStatus.Name,
+					Namespace: resourceStatus.Namespace,
+					Status:    "Missing",
+					Age:       0,
+					Raw:       nil,
+				},
+				APIVersion: resourceStatus.Group + "/" + resourceStatus.Version,
+				Kind:       resourceStatus.Kind + " [Missing]",
+				GVR:        gvr,
+			}
+
+			node := graph.AddNode(missingRes, RelationshipArgo)
+			node.Metadata["missing"] = "true"
+			graph.AddEdge(graph.Root, node, EdgeTypeArgoApp)
+		}
 	}
 
 	b.logger.Debug("ArgoCD graph built",
