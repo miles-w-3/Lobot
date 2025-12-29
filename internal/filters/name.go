@@ -58,16 +58,16 @@ func (rf *ResourceNameFilter) GetPattern() string {
 }
 
 // FilterResources filters a list of resources by name
-func (rf *ResourceNameFilter) FilterResources(resources []k8s.Resource) []k8s.Resource {
+func (rf *ResourceNameFilter) FilterResources(resources []k8s.TrackedObject) []k8s.TrackedObject {
 	// If no pattern, return all resources
 	if rf.pattern == "" {
 		return resources
 	}
 
-	filtered := make([]k8s.Resource, 0, len(resources))
+	filtered := make([]k8s.TrackedObject, 0, len(resources))
 
 	for _, resource := range resources {
-		if rf.matches(resource.Name) {
+		if rf.matches(resource.GetName()) {
 			filtered = append(filtered, resource)
 		}
 	}

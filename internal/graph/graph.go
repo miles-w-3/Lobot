@@ -8,24 +8,24 @@ import (
 type RelationshipType string
 
 const (
-	RelationshipOwner RelationshipType = "owner"      // OwnerReference relationship
-	RelationshipHelm  RelationshipType = "helm"       // Helm chart relationship (future)
-	RelationshipArgo  RelationshipType = "argocd"     // ArgoCD application relationship (future)
+	RelationshipOwner RelationshipType = "owner"  // OwnerReference relationship
+	RelationshipHelm  RelationshipType = "helm"   // Helm chart relationship (future)
+	RelationshipArgo  RelationshipType = "argocd" // ArgoCD application relationship (future)
 )
 
 // EdgeType represents the direction/nature of an edge
 type EdgeType string
 
 const (
-	EdgeTypeOwns      EdgeType = "owns"           // Parent owns child
-	EdgeTypeOwnedBy   EdgeType = "owned-by"       // Child owned by parent
-	EdgeTypeHelmPart  EdgeType = "helm-part"      // Part of Helm release (future)
-	EdgeTypeArgoApp   EdgeType = "argocd-app"     // Part of ArgoCD app (future)
+	EdgeTypeOwns     EdgeType = "owns"       // Parent owns child
+	EdgeTypeOwnedBy  EdgeType = "owned-by"   // Child owned by parent
+	EdgeTypeHelmPart EdgeType = "helm-part"  // Part of Helm release (future)
+	EdgeTypeArgoApp  EdgeType = "argocd-app" // Part of ArgoCD app (future)
 )
 
 // Node represents a resource in the graph
 type Node struct {
-	Resource         *k8s.Resource
+	Resource         k8s.TrackedObject
 	RelationshipType RelationshipType
 	Metadata         map[string]string
 	IsRoot           bool // True if this is the resource that triggered the visualization
@@ -40,14 +40,14 @@ type Edge struct {
 
 // ResourceGraph represents a graph of related resources
 type ResourceGraph struct {
-	Nodes      []*Node
-	Edges      []*Edge
-	Root       *Node // The resource that triggered the visualization
-	nodeMap    map[string]*Node // Map for quick lookups: "namespace/name/kind" -> Node
+	Nodes   []*Node
+	Edges   []*Edge
+	Root    *Node            // The resource that triggered the visualization
+	nodeMap map[string]*Node // Map for quick lookups: "namespace/name/kind" -> Node
 }
 
 // NewResourceGraph creates a new empty resource graph
-func NewResourceGraph(rootResource *k8s.Resource) *ResourceGraph {
+func NewResourceGraph(rootResource k8s.TrackedObject) *ResourceGraph {
 	root := &Node{
 		Resource:         rootResource,
 		RelationshipType: RelationshipOwner,
@@ -70,7 +70,7 @@ func NewResourceGraph(rootResource *k8s.Resource) *ResourceGraph {
 }
 
 // AddNode adds a node to the graph if it doesn't already exist
-func (g *ResourceGraph) AddNode(resource *k8s.Resource, relType RelationshipType) *Node {
+func (g *ResourceGraph) AddNode(resource k8s.TrackedObject, relType RelationshipType) *Node {
 	key := g.getNodeKey(resource)
 
 	// Check if node already exists
@@ -108,7 +108,7 @@ func (g *ResourceGraph) AddEdge(from, to *Node, edgeType EdgeType) {
 }
 
 // GetNode retrieves a node by resource key
-func (g *ResourceGraph) GetNode(resource *k8s.Resource) *Node {
+func (g *ResourceGraph) GetNode(resource k8s.TrackedObject) *Node {
 	key := g.getNodeKey(resource)
 	return g.nodeMap[key]
 }
@@ -136,11 +136,22 @@ func (g *ResourceGraph) GetParents(node *Node) []*Node {
 }
 
 // getNodeKey generates a unique key for a resource
-func (g *ResourceGraph) getNodeKey(resource *k8s.Resource) string {
-	// Use namespace/name/kind/apiVersion as unique identifier
-	if resource.Namespace != "" {
-		return resource.Namespace + "/" + resource.Name + "/" + resource.Kind + "/" + resource.APIVersion
+func (g *ResourceGraph) getNodeKey(resource k8s.TrackedObject) string {
+	resourceKind := "Undefined"
+	resourceAPIVersion := "Unknown"
+	if resource.GetCategory() == k8s.ObjectCategoryHelm {
+		resourceKind = "HelmChart"
+	} else {
+		resourceKind = resource.GetKind()
+		if raw := resource.GetRaw(); raw != nil {
+			resourceAPIVersion = raw.GetAPIVersion()
+		}
 	}
+	// Use namespace/name/kind/apiVersion as unique identifier
+	if resource.GetNamespace() != "" {
+		return resource.GetNamespace() + "/" + resource.GetName() + "/" + resourceKind + "/" + resourceAPIVersion
+	}
+
 	// For cluster-scoped resources
-	return resource.Name + "/" + resource.Kind + "/" + resource.APIVersion
+	return resource.GetName() + "/" + resourceKind + "/" + resourceAPIVersion
 }

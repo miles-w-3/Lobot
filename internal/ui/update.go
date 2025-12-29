@@ -6,8 +6,21 @@ import (
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/splash"
 )
+
+// MetricsCheckMsg is sent after checking if metrics API is available
+type MetricsCheckMsg struct {
+	Available bool
+}
+
+// MetricsDataMsg is sent when metrics data is fetched
+type MetricsDataMsg struct {
+	NodeMetrics []k8s.NodeMetrics
+	PodMetrics  []k8s.PodMetrics
+	Error       error
+}
 
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -29,7 +42,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.table.SetHeight(tableHeight)
 		// Table width should fill the border container (border takes 2 chars, content has 4 chars padding)
-		m.table.SetWidth(m.width - 6)
+		m.table.SetWidth(m.width - 6 - 10) // TODO: -10 for favorites
 
 		// Update manifest viewport size if in manifest mode
 		if m.viewMode == ViewModeManifest {
@@ -63,6 +76,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case ErrorMsg:
+		// Log error to error.log file
+		if m.errorTracker != nil {
+			m.errorTracker.LogError("system", msg.Error.Error())
+		}
+
 		if m.viewMode == ViewModeSplash {
 			m.splash.MarkError(msg.Error)
 		} else {
@@ -96,6 +114,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.visualizer = &visualizer
 			m.viewMode = ViewModeVisualize
 		}
+		return m, nil
+
+	case MetricsCheckMsg:
+		if !msg.Available {
+			m.modal.ShowError("Metrics Unavailable",
+				"The Kubernetes metrics API is not available.\n\n"+
+					"Please ensure metrics-server is installed and running:\n"+
+					"kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml")
+			return m, nil
+		}
+		// Metrics API is available, fetch metrics data
+		return m, m.fetchMetricsData()
+
+	case MetricsDataMsg:
+		if msg.Error != nil {
+			if m.errorTracker != nil {
+				m.errorTracker.LogError("metrics", msg.Error.Error())
+			}
+			m.modal.ShowError("Metrics Error", "Failed to fetch metrics: "+msg.Error.Error())
+			return m, nil
+		}
+		// Create and show the utilization dashboard
+		dashboard := NewUtilizationDashboardModel(msg.NodeMetrics, msg.PodMetrics, m.width, m.height)
+		m.utilizationDashboard = &dashboard
+		m.viewMode = ViewModeUtilization
 		return m, nil
 
 	case EditorFinishedMsg:
@@ -238,6 +281,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleManifestModeKeys(msg)
 	case ViewModeVisualize:
 		return m.handleVisualizeModeKeys(msg)
+	case ViewModeUtilization:
+		return m.handleUtilizationModeKeys(msg)
 	case ViewModeNormal:
 		return m.handleNormalModeKeys(msg)
 	case ViewModeSplash:
@@ -287,6 +332,10 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, m.normalKeys.PrevType):
 		m.PrevResourceType()
 
+	case key.Matches(msg, m.normalKeys.ToggleShowFavoriteTypes):
+		m.logger.Info("Detected toggle!", "set", !m.showingFavoriteTypes)
+		m.showingFavoriteTypes = !m.showingFavoriteTypes
+
 	// Filter by resource name
 	case key.Matches(msg, m.normalKeys.Filter):
 		m.EnterFilterMode()
@@ -319,6 +368,14 @@ func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return BuildGraphMsg{Resource: resource}
 			}
 		}
+
+	// Refresh resources
+	case key.Matches(msg, m.normalKeys.Refresh):
+		return m, m.startInformerWithSplash(m.CurrentResourceType())
+
+	// Open utilization dashboard
+	case key.Matches(msg, m.normalKeys.UtilizationDashboard):
+		return m, m.checkMetricsAPIAndOpen()
 
 	// Quit
 	case key.Matches(msg, m.normalKeys.Quit):
@@ -385,6 +442,24 @@ func (m Model) handleVisualizeModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.visualizer != nil {
 		updatedVisualizer, cmd := m.visualizer.Update(msg)
 		m.visualizer = &updatedVisualizer
+		return m, cmd
+	}
+
+	return m, nil
+}
+
+// handleUtilizationModeKeys handles keys in utilization dashboard mode
+func (m Model) handleUtilizationModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Check for back/quit keys
+	if msg.String() == "esc" || msg.String() == "q" {
+		m.ExitUtilizationMode()
+		return m, nil
+	}
+
+	// Pass all other keys to the utilization dashboard component
+	if m.utilizationDashboard != nil {
+		updatedDashboard, cmd := m.utilizationDashboard.Update(msg)
+		m.utilizationDashboard = &updatedDashboard
 		return m, cmd
 	}
 

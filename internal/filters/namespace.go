@@ -18,9 +18,9 @@ const (
 
 // NamespaceFilter handles filtering of resources by namespace
 type NamespaceFilter struct {
-	pattern    string
-	mode       FilterMode
-	regex      *regexp.Regexp
+	pattern       string
+	mode          FilterMode
+	regex         *regexp.Regexp
 	allNamespaces bool
 }
 
@@ -100,19 +100,18 @@ func (nf *NamespaceFilter) Matches(namespace string) bool {
 }
 
 // FilterResources filters a list of resources by namespace
-func (nf *NamespaceFilter) FilterResources(resources []k8s.Resource) []k8s.Resource {
+func (nf *NamespaceFilter) FilterResources(resources []k8s.TrackedObject) []k8s.TrackedObject {
 	if nf.allNamespaces {
 		return resources
 	}
 
-	filtered := make([]k8s.Resource, 0, len(resources))
+	filtered := make([]k8s.TrackedObject, 0, len(resources))
 	for _, resource := range resources {
 		// Cluster-scoped resources (empty namespace) are always included
-		if resource.Namespace == "" || nf.Matches(resource.Namespace) {
+		if resource.GetNamespace() == "" || nf.Matches(resource.GetNamespace()) {
 			filtered = append(filtered, resource)
 		}
 	}
-
 	return filtered
 }
 

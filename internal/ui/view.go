@@ -3,21 +3,23 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/reflow/ansi"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // View renders the UI
 func (m Model) View() string {
 	var baseView string
-
 	if m.viewMode == ViewModeSplash {
 		baseView = m.splash.View()
 	} else if m.viewMode == ViewModeManifest {
 		baseView = m.renderManifestView()
 	} else if m.viewMode == ViewModeVisualize {
 		baseView = m.renderVisualizeView()
+	} else if m.viewMode == ViewModeUtilization {
+		baseView = m.renderUtilizationView()
 	} else {
 		baseView = m.renderNormalView()
 	}
@@ -45,6 +47,11 @@ func (m Model) renderNormalView() string {
 
 	// Main content area with border
 	mainContent := m.renderMainContent(contentHeight - 2)
+	// Extend with favorite types details as needed
+	if m.showingFavoriteTypes {
+		favoriteTypesContent := m.renderFavoriteTypesContent()
+		mainContent = lipgloss.JoinHorizontal(lipgloss.Top, favoriteTypesContent, mainContent)
+	}
 
 	// Wrap main content in border
 	borderedContent := lipgloss.NewStyle().
@@ -84,6 +91,15 @@ func (m Model) renderMainContent(height int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+func (m Model) renderFavoriteTypesContent() string {
+	favoriteTypesBox := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(10).
+		Height(26)
+	return favoriteTypesBox.Render(m.favoriteTypesViewport.View())
+}
+
 // renderManifestView renders the manifest viewer
 func (m Model) renderManifestView() string {
 	// Use the stored manifest resource instead of getting by index
@@ -94,7 +110,7 @@ func (m Model) renderManifestView() string {
 	}
 
 	// Title
-	title := titleStyle.Render(fmt.Sprintf("Manifest: %s/%s", resource.Kind, resource.Name))
+	title := titleStyle.Render(fmt.Sprintf("Manifest: %s/%s", resource.GetKind(), resource.GetName()))
 
 	// Manifest content in bordered viewport
 	viewportContent := m.manifestViewport.View()
@@ -126,18 +142,46 @@ func (m Model) renderStatusLine() string {
 		Foreground(colorPrimary).
 		Bold(true)
 
-	// Resource type badge on the right
+	// Resource type badge and metadata on the right
 	resourceBadgeStyle := lipgloss.NewStyle().
 		Foreground(colorSecondary).
 		Background(lipgloss.Color("#1a1a1a")).
 		Bold(true).
 		Padding(0, 1)
 
+	metadataStyle := lipgloss.NewStyle().
+		Foreground(colorMuted)
+
 	left := clusterStyle.Render(fmt.Sprintf("▶ %s", clusterName))
-	right := resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName))
+
+	// Add error indicator if errors have been logged
+	if m.errorTracker != nil && m.errorTracker.HasErrors() {
+		errorStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#FF6B6B")).
+			Bold(true)
+		left += "  " + errorStyle.Render(fmt.Sprintf("⚠ %d errors (see error.log)", m.errorTracker.GetErrorCount()))
+	}
+
+	// Build right side with resource type, update time, and refresh interval
+	rightParts := []string{
+		resourceBadgeStyle.Render(fmt.Sprintf("● %s", currentType.DisplayName)),
+	}
+
+	// Add last update time
+	lastUpdate := m.resourceService.GetLastUpdateTime(currentType.GVR)
+	if !lastUpdate.IsZero() {
+		rightParts = append(rightParts, metadataStyle.Render(fmt.Sprintf("updated %s", formatRelativeTime(lastUpdate))))
+	}
+
+	// Add refresh interval - all resources use the same 5-minute resync period
+	// All updates are event-driven via watch API; resync is just a safety net
+	refreshInterval := "resync: 5m"
+	rightParts = append(rightParts, metadataStyle.Render(refreshInterval))
+
+	right := strings.Join(rightParts, " • ")
 
 	// Calculate spacing to push right content to the right
-	spacing := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
+	spacing := m.width - lipgloss.Width(left) - ansi.StringWidth(right) - 4
 	if spacing < 1 {
 		spacing = 1
 	}
@@ -148,12 +192,6 @@ func (m Model) renderStatusLine() string {
 		Padding(0, 1).
 		MarginBottom(1).
 		Render(line)
-}
-
-// renderHeader renders the header
-func (m Model) renderHeader() string {
-	title := titleStyle.Render("Lobot")
-	return headerStyle.Render(title)
 }
 
 // renderFilterBar renders the filter input bar
@@ -244,31 +282,6 @@ func (m Model) renderModalOverlay(baseView string) string {
 	return overlayCenter(baseView, modalView, m.width, m.height)
 }
 
-// stripANSI removes ANSI escape codes for checking if line has content
-func stripANSI(s string) string {
-	// Simple ANSI stripper - matches ESC [ ... m
-	result := ""
-	inEscape := false
-	escapeDepth := 0
-
-	for _, r := range s {
-		if r == '\x1b' {
-			inEscape = true
-			escapeDepth = 0
-			continue
-		}
-		if inEscape {
-			escapeDepth++
-			if r == 'm' || escapeDepth > 20 {
-				inEscape = false
-			}
-			continue
-		}
-		result += string(r)
-	}
-	return result
-}
-
 // renderSelectorOverlay renders the selector as an overlay on top of the base view
 func (m Model) renderSelectorOverlay(baseView string) string {
 	if m.selector == nil {
@@ -305,7 +318,7 @@ func (m Model) renderSelectorOverlay(baseView string) string {
 		}
 
 		// If selector line has content, use it; otherwise use base
-		trimmed := strings.TrimSpace(stripANSI(selectorLine))
+		trimmed := strings.TrimSpace(ansi.Strip(selectorLine))
 		if trimmed == "" {
 			outputLines[i] = baseLine
 		} else {
@@ -325,13 +338,22 @@ func (m Model) renderVisualizeView() string {
 	return m.visualizer.View()
 }
 
+// renderUtilizationView renders the utilization dashboard
+func (m Model) renderUtilizationView() string {
+	if m.utilizationDashboard == nil {
+		return "Loading metrics..."
+	}
+
+	return m.utilizationDashboard.View()
+}
+
 // overlayCenter overlays content centered on a base view
 func overlayCenter(base, overlay string, width, height int) string {
 	overlayLines := strings.Split(overlay, "\n")
 	overlayHeight := len(overlayLines)
 	overlayWidth := 0
 	for _, line := range overlayLines {
-		w := ansi.PrintableRuneWidth(line)
+		w := ansi.StringWidth(line)
 		if w > overlayWidth {
 			overlayWidth = w
 		}
@@ -374,8 +396,8 @@ func overlayLineAt(base, overlay string, x int) string {
 		x = 0
 	}
 
-	baseWidth := ansi.PrintableRuneWidth(base)
-	overlayWidth := ansi.PrintableRuneWidth(overlay)
+	baseWidth := ansi.StringWidth(base)
+	overlayWidth := ansi.StringWidth(overlay)
 	overlayEnd := x + overlayWidth
 
 	// If overlay is completely beyond the base, just append with padding
@@ -420,4 +442,25 @@ func overlayLineAt(base, overlay string, x int) string {
 	}
 
 	return before.String() + overlay + after.String()
+}
+
+// formatRelativeTime formats a time as a relative duration (e.g., "2m ago", "30s ago")
+func formatRelativeTime(t time.Time) string {
+	if t.IsZero() {
+		return "never"
+	}
+
+	duration := time.Since(t)
+
+	if duration < time.Second {
+		return "just now"
+	} else if duration < time.Minute {
+		return fmt.Sprintf("%ds ago", int(duration.Seconds()))
+	} else if duration < time.Hour {
+		return fmt.Sprintf("%dm ago", int(duration.Minutes()))
+	} else if duration < 24*time.Hour {
+		return fmt.Sprintf("%dh ago", int(duration.Hours()))
+	} else {
+		return fmt.Sprintf("%dd ago", int(duration.Hours()/24))
+	}
 }

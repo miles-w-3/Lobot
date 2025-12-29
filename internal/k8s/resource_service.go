@@ -92,7 +92,7 @@ func (svc *ResourceService) FinalizeConfiguration(onUpdate UpdateCallback) error
 }
 
 // GetResources returns resources for the given GVR
-func (svc *ResourceService) GetResources(gvr schema.GroupVersionResource) []Resource {
+func (svc *ResourceService) GetResources(gvr schema.GroupVersionResource) []TrackedObject {
 	return svc.informer.GetResources(gvr)
 }
 
@@ -118,13 +118,13 @@ func (svc *ResourceService) GetClusterName() string {
 }
 
 // GetResourcesByOwnerUID returns resources owned by the given UID
-func (svc *ResourceService) GetResourcesByOwnerUID(uid string) []Resource {
+func (svc *ResourceService) GetResourcesByOwnerUID(uid string) []TrackedObject {
 	return svc.informer.GetResourcesByOwnerUID(uid)
 }
 
 // FetchResource fetches a resource using the dynamic client
 // This is used for resources not in the cache (e.g., owner references)
-func (svc *ResourceService) FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) *Resource {
+func (svc *ResourceService) FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) TrackedObject {
 	return svc.informer.FetchResource(svc.ctx, gvr, name, namespace, expectedUID)
 }
 
@@ -134,17 +134,17 @@ func (svc *ResourceService) DiscoverResourceName(gv schema.GroupVersion, kind st
 }
 
 // GetAllResourceTypes discovers all available resource types in the cluster
-func (svc *ResourceService) GetAllResourceTypes() ([]ResourceType, error) {
+func (svc *ResourceService) GetAllResourceTypes() ([]*TrackedType, error) {
 	return svc.discovery.DiscoverAllResources()
 }
 
 // PrepareEditFile prepares a resource for editing
-func (svc *ResourceService) PrepareEditFile(resource *Resource) (*EditResult, error) {
+func (svc *ResourceService) PrepareEditFile(resource TrackedObject) (*EditResult, error) {
 	return svc.client.PrepareEditFile(resource)
 }
 
 // ProcessEditedFile processes an edited resource file
-func (svc *ResourceService) ProcessEditedFile(ctx context.Context, resource *Resource, editResult *EditResult) error {
+func (svc *ResourceService) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) error {
 	return svc.client.ProcessEditedFile(ctx, resource, editResult)
 }
 
@@ -232,8 +232,13 @@ func (svc *ResourceService) SwitchContext(contextName string) error {
 }
 
 // StartInformer starts an informer for the given resource type
-func (svc *ResourceService) StartInformer(resourceType ResourceType) error {
+func (svc *ResourceService) StartInformer(resourceType *TrackedType) error {
 	return svc.informer.StartInformer(svc.ctx, resourceType)
+}
+
+// GetLastUpdateTime returns the last time a resource type was updated
+func (svc *ResourceService) GetLastUpdateTime(gvr schema.GroupVersionResource) time.Time {
+	return svc.informer.GetLastUpdateTime(gvr)
 }
 
 // Close cleans up the service

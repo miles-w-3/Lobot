@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
@@ -37,6 +36,7 @@ const (
 	ViewModeManifest
 	ViewModeResourceTypeSelection
 	ViewModeVisualize
+	ViewModeUtilization
 )
 
 // Model represents the UI state
@@ -45,10 +45,10 @@ type Model struct {
 	// Kubernetes data
 	resourceService   *k8s.ResourceService
 	graphBuilder      *graph.Builder
-	resourceTypes     []k8s.ResourceType
+	trackedTypes      []*k8s.TrackedType
 	currentType       int
-	resources         []k8s.Resource
-	filteredResources []k8s.Resource
+	resources         []k8s.TrackedObject
+	filteredResources []k8s.TrackedObject
 
 	// UI state
 	viewMode      ViewMode
@@ -71,7 +71,7 @@ type Model struct {
 	// Manifest viewer
 	manifestViewport viewport.Model
 	manifestContent  string
-	manifestResource *k8s.Resource // The resource being viewed in manifest mode
+	manifestResource k8s.TrackedObject // The resource being viewed in manifest mode
 
 	// Status
 	ready bool
@@ -82,8 +82,12 @@ type Model struct {
 	// Selector (for namespace/context selection)
 	selector *SelectorModel
 
-	// Visualizer
 	visualizer *VisualizerModel
+
+	utilizationDashboard *UtilizationDashboardModel
+
+	showingFavoriteTypes  bool
+	favoriteTypesViewport viewport.Model
 
 	// Key bindings
 	globalKeys     GlobalKeyMap
@@ -91,6 +95,9 @@ type Model struct {
 	manifestKeys   ManifestModeKeyMap
 	visualizerKeys VisualizerModeKeyMap
 	filterKeys     FilterModeKeyMap
+
+	// Error tracking
+	errorTracker *ErrorTracker
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -113,25 +120,17 @@ type EditorFinishedMsg struct {
 
 // BuildGraphMsg is sent to trigger graph building
 type BuildGraphMsg struct {
-	Resource *k8s.Resource
+	Resource k8s.TrackedObject
 }
 
 // NewModel creates a new UI model
-func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
+func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTracker *ErrorTracker) Model {
 	filterInput := textinput.New()
 	filterInput.Placeholder = "Search resource name..."
 	filterInput.CharLimit = 100
 
-	// Initialize table with empty columns (will be set later)
-	columns := []table.Column{
-		{Title: "NAME", Width: 40},
-		{Title: "NAMESPACE", Width: 20},
-		{Title: "STATUS", Width: 15},
-		{Title: "AGE", Width: 10},
-	}
-
 	t := table.New(
-		table.WithColumns(columns),
+		// table.WithColumns(columns),
 		table.WithFocused(true),
 		table.WithHeight(10),
 	)
@@ -152,27 +151,35 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger) Model {
 	// Create graph builder with the resource service as the provider
 	graphBuilder := graph.NewBuilder(resourceService, nil)
 
+	// TODO: Replace these hardcoded values
+	favoriteTypesViewport := viewport.New(10, 30)
+
+	favoriteTypesViewport.SetContent("Test\nTest2\nTest3\n")
+
 	return Model{
-		logger:          logger,
-		resourceService: resourceService,
-		graphBuilder:    graphBuilder,
-		resourceTypes:   k8s.DefaultResourceTypes(),
-		currentType:     0,
-		selectedIndex:   0,
-		scrollOffset:    0,
-		viewMode:        ViewModeSplash,
-		namespaceFilter: filters.NewNamespaceFilter(),
-		nameFilter:      filters.NewResourceNameFilter(),
-		filterInput:     filterInput,
-		splash:          splash.NewModel(logger),
-		table:           t,
-		ready:           false,
-		modal:           NewModal(),
-		globalKeys:      DefaultGlobalKeyMap(),
-		normalKeys:      DefaultNormalModeKeyMap(),
-		manifestKeys:    DefaultManifestModeKeyMap(),
-		visualizerKeys:  DefaultVisualizerModeKeyMap(),
-		filterKeys:      DefaultFilterModeKeyMap(),
+		logger:                logger,
+		resourceService:       resourceService,
+		graphBuilder:          graphBuilder,
+		trackedTypes:          k8s.DefaultResourceTypes(),
+		currentType:           0,
+		selectedIndex:         0,
+		scrollOffset:          0,
+		viewMode:              ViewModeSplash,
+		namespaceFilter:       filters.NewNamespaceFilter(),
+		nameFilter:            filters.NewResourceNameFilter(),
+		favoriteTypesViewport: favoriteTypesViewport,
+		filterInput:           filterInput,
+		splash:                splash.NewModel(logger),
+		table:                 t,
+		ready:                 false,
+		showingFavoriteTypes:  false,
+		modal:                 NewModal(),
+		globalKeys:            DefaultGlobalKeyMap(),
+		normalKeys:            DefaultNormalModeKeyMap(),
+		manifestKeys:          DefaultManifestModeKeyMap(),
+		visualizerKeys:        DefaultVisualizerModeKeyMap(),
+		filterKeys:            DefaultFilterModeKeyMap(),
+		errorTracker:          errorTracker,
 	}
 }
 
@@ -195,8 +202,8 @@ func (m Model) Init() tea.Cmd {
 // UpdateResources updates the displayed resources from the informer
 func (m *Model) UpdateResources() {
 	// Get resources for current type
-	currentResourceType := m.resourceTypes[m.currentType]
-	m.resources = m.resourceService.GetResources(currentResourceType.GVR)
+	currentTrackedType := m.trackedTypes[m.currentType]
+	m.resources = m.resourceService.GetResources(currentTrackedType.GVR)
 
 	// Apply namespace filter first
 	m.filteredResources = m.namespaceFilter.FilterResources(m.resources)
@@ -207,58 +214,12 @@ func (m *Model) UpdateResources() {
 	// Clear rows first to avoid column mismatch during rendering
 	m.table.SetRows([]table.Row{})
 
-	// Update table columns based on resource type
-	var columns []table.Column
-	if currentResourceType.DisplayName == "Helm Releases" {
-		// Special columns for Helm releases: NAME, NAMESPACE, STATUS, VERSION
-		columns = []table.Column{
-			{Title: "NAME", Width: 30},
-			{Title: "NAMESPACE", Width: 20},
-			{Title: "STATUS", Width: 15},
-			{Title: "VERSION", Width: 30},
-		}
-	} else if currentResourceType.Namespaced {
-		columns = []table.Column{
-			{Title: "NAME", Width: 40},
-			{Title: "NAMESPACE", Width: 20},
-			{Title: "STATUS", Width: 15},
-			{Title: "AGE", Width: 10},
-		}
-	} else {
-		columns = []table.Column{
-			{Title: "NAME", Width: 60},
-			{Title: "STATUS", Width: 15},
-			{Title: "AGE", Width: 10},
-		}
-	}
-	m.table.SetColumns(columns)
+	m.table.SetColumns(currentTrackedType.Columns)
 
 	// Update table rows
 	rows := make([]table.Row, 0, len(m.filteredResources))
 	for _, resource := range m.filteredResources {
-		age := formatAge(resource.Age)
-		if currentResourceType.DisplayName == "Helm Releases" {
-			// Special row format for Helm releases
-			rows = append(rows, table.Row{
-				truncate(resource.Name, 30),
-				truncate(resource.Namespace, 20),
-				resource.Status,
-				truncate(resource.HelmChart, 30),
-			})
-		} else if currentResourceType.Namespaced {
-			rows = append(rows, table.Row{
-				truncate(resource.Name, 40),
-				truncate(resource.Namespace, 20),
-				resource.Status,
-				age,
-			})
-		} else {
-			rows = append(rows, table.Row{
-				truncate(resource.Name, 60),
-				resource.Status,
-				age,
-			})
-		}
+		rows = append(rows, currentTrackedType.RowBinder(resource))
 	}
 	m.table.SetRows(rows)
 
@@ -308,9 +269,9 @@ func (m *Model) SetReady() {
 }
 
 // GetSelectedResource returns the currently selected resource
-func (m *Model) GetSelectedResource() *k8s.Resource {
+func (m *Model) GetSelectedResource() k8s.TrackedObject {
 	if m.selectedIndex >= 0 && m.selectedIndex < len(m.filteredResources) {
-		return &m.filteredResources[m.selectedIndex]
+		return m.filteredResources[m.selectedIndex]
 	}
 	return nil
 }
@@ -318,7 +279,7 @@ func (m *Model) GetSelectedResource() *k8s.Resource {
 // EnterManifestMode enters manifest viewing mode for the selected resource
 func (m *Model) EnterManifestMode() tea.Cmd {
 	resource := m.GetSelectedResource()
-	if resource == nil || resource.Raw == nil {
+	if resource == nil || resource.GetRaw() == nil {
 		return nil
 	}
 
@@ -327,7 +288,7 @@ func (m *Model) EnterManifestMode() tea.Cmd {
 	m.manifestResource = resource
 
 	// Format the manifest as YAML
-	m.manifestContent = formatManifest(resource.Raw)
+	m.manifestContent = formatManifest(resource.GetRaw())
 
 	// Create viewport
 	m.manifestViewport = viewport.New(m.width-4, m.height-6)
@@ -356,12 +317,12 @@ func (m *Model) RefreshManifestResource() {
 	}
 
 	// Find the updated resource in the current resource list by matching name, namespace, and kind
-	var updatedResource *k8s.Resource
+	var updatedResource k8s.TrackedObject
 	for i := range m.resources {
-		res := &m.resources[i]
-		if res.Name == m.manifestResource.Name &&
-			res.Namespace == m.manifestResource.Namespace &&
-			res.Kind == m.manifestResource.Kind {
+		res := m.resources[i]
+		if res.GetName() == m.manifestResource.GetName() &&
+			res.GetNamespace() == m.manifestResource.GetNamespace() &&
+			res.GetKind() == m.manifestResource.GetKind() {
 			updatedResource = res
 			break
 		}
@@ -376,19 +337,19 @@ func (m *Model) RefreshManifestResource() {
 	m.manifestResource = updatedResource
 
 	// Reformat the manifest with the new data
-	m.manifestContent = formatManifest(updatedResource.Raw)
+	m.manifestContent = formatManifest(updatedResource.GetRaw())
 	m.manifestViewport.SetContent(m.manifestContent)
 }
 
 // CopyManifestToClipboard copies the raw manifest YAML to clipboard
 func (m *Model) CopyManifestToClipboard() (tea.Model, tea.Cmd) {
 	resource := m.GetSelectedResource()
-	if resource == nil || resource.Raw == nil {
+	if resource == nil || resource.GetRaw() == nil {
 		return *m, nil
 	}
 
 	// Marshal to YAML without formatting
-	yamlBytes, err := yaml.Marshal(resource.Raw)
+	yamlBytes, err := yaml.Marshal(resource.GetRaw())
 	if err != nil {
 		m.modal.ShowError("Copy Failed", "Failed to marshal YAML: "+err.Error())
 		return *m, nil
@@ -421,11 +382,50 @@ func (m *Model) ExitVisualizeMode() {
 	m.visualizer = nil
 }
 
+// ExitUtilizationMode exits utilization dashboard mode
+func (m *Model) ExitUtilizationMode() {
+	m.viewMode = ViewModeNormal
+	m.utilizationDashboard = nil
+}
+
+// checkMetricsAPIAndOpen checks if metrics API is available and opens the dashboard
+func (m *Model) checkMetricsAPIAndOpen() tea.Cmd {
+	return func() tea.Msg {
+		client := m.resourceService.GetClient()
+		ctx := context.Background()
+		available := client.CheckMetricsAPIAvailable(ctx)
+		return MetricsCheckMsg{Available: available}
+	}
+}
+
+// fetchMetricsData fetches metrics data from the cluster
+func (m *Model) fetchMetricsData() tea.Cmd {
+	return func() tea.Msg {
+		client := m.resourceService.GetClient()
+		ctx := context.Background()
+
+		metricsClient, err := k8s.NewMetricsClient(client, m.logger)
+		if err != nil {
+			return MetricsDataMsg{Error: err}
+		}
+
+		nodeMetrics, podMetrics, err := metricsClient.GetMetricsFromServer(ctx)
+		if err != nil {
+			return MetricsDataMsg{Error: err}
+		}
+
+		return MetricsDataMsg{
+			NodeMetrics: nodeMetrics,
+			PodMetrics:  podMetrics,
+		}
+	}
+}
+
 // EditSelectedResource opens the selected resource in an external editor
 // This properly suspends the BubbleTea program while the editor runs
 func (m *Model) EditSelectedResource() tea.Cmd {
 	// If in manifest mode, use the stored resource; otherwise get current selection
-	var resource *k8s.Resource
+	var resource k8s.TrackedObject
 	if m.viewMode == ViewModeManifest {
 		resource = m.manifestResource
 	} else {
@@ -451,7 +451,7 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 	}
 
 	// Create a copy of the resource for the callback
-	resourceCopy := *resource
+	resourceCopy := resource
 
 	// Use tea.ExecProcess to properly suspend the TUI and run the editor
 	return tea.ExecProcess(exec.Command(editor, editResult.TmpFilePath), func(err error) tea.Msg {
@@ -466,7 +466,7 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 		}
 
 		// Process the edited file (validates and applies changes)
-		processErr := m.resourceService.ProcessEditedFile(context.Background(), &resourceCopy, editResult)
+		processErr := m.resourceService.ProcessEditedFile(context.Background(), resourceCopy, editResult)
 
 		// Check if the user just cancelled (no changes made)
 		if processErr == nil {
@@ -485,19 +485,33 @@ func (m *Model) EditSelectedResource() tea.Cmd {
 }
 
 // CurrentResourceType returns the currently selected resource type
-func (m *Model) CurrentResourceType() k8s.ResourceType {
-	if m.currentType >= 0 && m.currentType < len(m.resourceTypes) {
-		return m.resourceTypes[m.currentType]
+func (m *Model) CurrentResourceType() *k8s.TrackedType {
+	if m.currentType >= 0 && m.currentType < len(m.trackedTypes) {
+		return m.trackedTypes[m.currentType]
 	}
 	return k8s.PodResource
 }
 
+// RefreshCurrentResourceType triggers a refresh of the current resource type
+func (m *Model) startInformerWithSplash(resourceType *k8s.TrackedType) tea.Cmd {
+	currentType := m.CurrentResourceType()
+	return func() tea.Msg {
+		// Re-start the informer for the current resource type to trigger a refresh
+		// This will re-list all resources from the API server
+		err := m.resourceService.StartInformer(currentType)
+		if err != nil {
+			m.logger.Error("Failed to refresh resource type", "type", currentType.DisplayName, "error", err)
+		}
+		return nil
+	}
+}
+
 // NextResourceType moves to the next resource type
 func (m *Model) NextResourceType() {
-	if len(m.resourceTypes) == 0 {
+	if len(m.trackedTypes) == 0 {
 		return // No resource types available
 	}
-	m.currentType = (m.currentType + 1) % len(m.resourceTypes)
+	m.currentType = (m.currentType + 1) % len(m.trackedTypes)
 	m.selectedIndex = 0
 	m.scrollOffset = 0
 	m.UpdateResources()
@@ -505,12 +519,12 @@ func (m *Model) NextResourceType() {
 
 // PrevResourceType moves to the previous resource type
 func (m *Model) PrevResourceType() {
-	if len(m.resourceTypes) == 0 {
+	if len(m.trackedTypes) == 0 {
 		return // No resource types available
 	}
 	m.currentType--
 	if m.currentType < 0 {
-		m.currentType = len(m.resourceTypes) - 1
+		m.currentType = len(m.trackedTypes) - 1
 	}
 	m.selectedIndex = 0
 	m.scrollOffset = 0
@@ -575,8 +589,8 @@ func (m *Model) SwitchContext(contextName string) tea.Cmd {
 				return ErrorMsg{Error: fmt.Errorf("context switch failed: %w", err)}
 			}
 
-			m.resources = []k8s.Resource{}
-			m.filteredResources = []k8s.Resource{}
+			m.resources = []k8s.TrackedObject{}
+			m.filteredResources = []k8s.TrackedObject{}
 			m.selectedIndex = 0
 			m.scrollOffset = 0
 
@@ -601,25 +615,6 @@ func max(a, b int) int {
 	return b
 }
 
-func formatAge(duration time.Duration) string {
-	if duration < time.Minute {
-		return fmt.Sprintf("%ds", int(duration.Seconds()))
-	} else if duration < time.Hour {
-		return fmt.Sprintf("%dm", int(duration.Minutes()))
-	} else if duration < 24*time.Hour {
-		return fmt.Sprintf("%dh", int(duration.Hours()))
-	} else {
-		return fmt.Sprintf("%dd", int(duration.Hours()/24))
-	}
-}
-
-func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
-
 // GetCurrentModeHelp returns help bindings for the current mode
 func (m *Model) GetCurrentModeHelp() help.KeyMap {
 	switch m.viewMode {
@@ -628,6 +623,10 @@ func (m *Model) GetCurrentModeHelp() help.KeyMap {
 	case ViewModeManifest:
 		return m.manifestKeys
 	case ViewModeVisualize:
+		// Get the actual visualizer's keymap (tree or graph)
+		if m.visualizer != nil {
+			return m.visualizer.GetKeyMap()
+		}
 		return m.visualizerKeys
 	case ViewModeFilter:
 		return m.filterKeys

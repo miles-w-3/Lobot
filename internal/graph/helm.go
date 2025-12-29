@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/miles-w-3/lobot/internal/k8s"
@@ -10,17 +11,24 @@ import (
 )
 
 // BuildHelmGraph builds a graph for a Helm release showing all deployed resources
-func (b *Builder) BuildHelmGraph(helmRelease *k8s.Resource) *ResourceGraph {
+func (b *Builder) BuildHelmGraph(helmRelease k8s.TrackedObject) *ResourceGraph {
 	graph := NewResourceGraph(helmRelease)
+	
+	// Type assert to HelmRelease to access specific fields
+	release, ok := helmRelease.(*k8s.HelmRelease)
+	if !ok {
+		b.logger.Error("Failed to cast TrackedObject to HelmRelease", "type", fmt.Sprintf("%T", helmRelease))
+		return graph
+	}
 
 	b.logger.Debug("Building Helm release graph",
-		"name", helmRelease.Name,
-		"namespace", helmRelease.Namespace)
+		"name", helmRelease.GetName(),
+		"namespace", helmRelease.GetNamespace())
 
-	b.logger.Debug("Helm release manifest length", "length", len(helmRelease.HelmManifest))
+	b.logger.Debug("Helm release manifest length", "length", len(release.HelmManifest))
 
 	// Parse the Helm manifest to extract individual resource definitions
-	manifestResources := b.parseHelmManifest(helmRelease.HelmManifest, helmRelease.Namespace)
+	manifestResources := b.parseHelmManifest(release.HelmManifest, helmRelease.GetNamespace())
 
 	b.logger.Debug("Parsed Helm manifest",
 		"resources", len(manifestResources))
@@ -40,13 +48,16 @@ func (b *Builder) BuildHelmGraph(helmRelease *k8s.Resource) *ResourceGraph {
 			b.traverseOwned(graph, node, visited, 0)
 		} else {
 			// Resource is missing from cluster - create a "missing" node
-			missingResource := manifestRes
-			missingResource.Status = "Missing"
-			missingResource.Kind = manifestRes.Kind + " [Missing]"
-
-			node := graph.AddNode(&missingResource, RelationshipHelm)
-			node.Metadata["missing"] = "true"
-			graph.AddEdge(graph.Root, node, EdgeTypeHelmPart)
+			// We need to modify the resource to mark it as missing
+			// Since manifestRes is an interface holding a pointer, we can type assert and modify
+			if k8sRes, ok := manifestRes.(*k8s.K8sResource); ok {
+				k8sRes.Status = "Missing"
+				k8sRes.Kind = k8sRes.Kind + " [Missing]"
+				
+				node := graph.AddNode(k8sRes, RelationshipHelm)
+				node.Metadata["missing"] = "true"
+				graph.AddEdge(graph.Root, node, EdgeTypeHelmPart)
+			}
 		}
 	}
 
@@ -58,12 +69,12 @@ func (b *Builder) BuildHelmGraph(helmRelease *k8s.Resource) *ResourceGraph {
 }
 
 // parseHelmManifest parses a Helm manifest YAML string into individual resources
-func (b *Builder) parseHelmManifest(manifest string, defaultNamespace string) []k8s.Resource {
+func (b *Builder) parseHelmManifest(manifest string, defaultNamespace string) []k8s.TrackedObject {
 	if manifest == "" {
 		return nil
 	}
 
-	var resources []k8s.Resource
+	var resources []k8s.TrackedObject
 
 	// Split by "---" (YAML document separator)
 	documents := strings.SplitSeq(manifest, "\n---\n")
@@ -92,15 +103,12 @@ func (b *Builder) parseHelmManifest(manifest string, defaultNamespace string) []
 			namespace = defaultNamespace
 		}
 
-		resource := k8s.Resource{
-			Name:       obj.GetName(),
-			Namespace:  namespace,
-			Kind:       obj.GetKind(),
-			APIVersion: obj.GetAPIVersion(),
-			Status:     "Unknown",
-			Labels:     obj.GetLabels(),
-			Raw:        &obj,
+		gvr, err := b.manifestResourceToGVR(obj)
+		if err != nil {
+			continue
 		}
+
+		resource := k8s.ConvertUnstructuredToTrackedObject(&obj, gvr)
 
 		resources = append(resources, resource)
 	}
@@ -109,65 +117,70 @@ func (b *Builder) parseHelmManifest(manifest string, defaultNamespace string) []
 }
 
 // findResourceInCluster tries to find a resource in the cluster that matches the manifest
-func (b *Builder) findResourceInCluster(manifestResource k8s.Resource) *k8s.Resource {
-	// Convert apiVersion + kind to GVR
-	gvr, err := b.manifestResourceToGVR(manifestResource)
-	if err != nil {
-		b.logger.Debug("Could not determine GVR for resource",
-			"kind", manifestResource.Kind,
-			"apiVersion", manifestResource.APIVersion,
-			"error", err)
+func (b *Builder) findResourceInCluster(manifestResource k8s.TrackedObject) k8s.TrackedObject {
+	// Get GVR from the manifest resource
+	// K8sResource has GVR field
+	var gvr schema.GroupVersionResource
+	var kind, apiVersion string
+	
+	if k8sRes, ok := manifestResource.(*k8s.K8sResource); ok {
+		gvr = k8sRes.GVR
+		kind = k8sRes.Kind
+		apiVersion = k8sRes.APIVersion
+	} else {
 		return nil
 	}
+
+
 
 	// Get all cached resources of this type
 	cachedResources := b.provider.GetResources(gvr)
 
 	// Find the resource by name and namespace
 	for i := range cachedResources {
-		res := &cachedResources[i]
-		if res.Name == manifestResource.Name &&
-			res.Namespace == manifestResource.Namespace {
+		res := cachedResources[i]
+		if res.GetName() == manifestResource.GetName() &&
+			res.GetNamespace() == manifestResource.GetNamespace() {
 			return res
 		}
 	}
 
 	b.logger.Debug("Resource not found in cache",
-		"kind", manifestResource.Kind,
-		"apiVersion", manifestResource.APIVersion,
-		"name", manifestResource.Name,
-		"namespace", manifestResource.Namespace)
+		"kind", kind,
+		"apiVersion", apiVersion,
+		"name", manifestResource.GetName(),
+		"namespace", manifestResource.GetNamespace())
 	// Not found in cache - try fetching via API
 	// We won't have the UIDs for these resources
-	resource := b.provider.FetchResource(gvr, manifestResource.Name, manifestResource.Namespace, "")
+	resource := b.provider.FetchResource(gvr, manifestResource.GetName(), manifestResource.GetNamespace(), "")
 
 	// TODO: If resource down't have helm annotation, add a warning or note
 	if resource != nil {
 		b.logger.Debug("Resource found via dynamic client",
-			"kind", manifestResource.Kind)
+			"kind", kind)
 	} else {
-		b.logger.Debug("Resource not found via dynamic client", "name", manifestResource.Name)
+		b.logger.Debug("Resource not found via dynamic client", "name", manifestResource.GetName())
 	}
 	return resource
 }
 
 // manifestResourceToGVR converts a manifest resource (apiVersion + kind) to GVR
-func (b *Builder) manifestResourceToGVR(resource k8s.Resource) (schema.GroupVersionResource, error) {
+func (b *Builder) manifestResourceToGVR(resource unstructured.Unstructured) (schema.GroupVersionResource, error) {
 	// Parse apiVersion into group/version
-	gv, err := parseGroupVersion(resource.APIVersion)
+	gv, err := parseGroupVersion(resource.GetAPIVersion())
 	if err != nil {
 		return schema.GroupVersionResource{}, err
 	}
 
 	// Check cache first
-	cacheKey := gv.String() + "/" + resource.Kind
+	cacheKey := gv.String() + "/" + resource.GetKind()
 	if gvr, exists := b.kindToGVR[cacheKey]; exists {
 		return gvr, nil
 	}
 
 	// Use discovery API to find the resource name for this Kind
 	schemaGV := schema.GroupVersion{Group: gv.Group, Version: gv.Version}
-	resourceName, err := b.discoverResourceName(schemaGV, resource.Kind)
+	resourceName, err := b.discoverResourceName(schemaGV, resource.GetKind())
 	if err != nil {
 		return schema.GroupVersionResource{}, err
 	}
