@@ -373,42 +373,6 @@ func sliceLineVisual(line string, start, width int) string {
 	return sliced
 }
 
-// OverlayStyledContent overlays styled content onto a base line at visual position x.
-// Both base and overlay can contain ANSI escape sequences.
-func OverlayStyledContent(baseLine, overlay string, x int) string {
-	baseWidth := ansi.StringWidth(baseLine)
-	overlayWidth := ansi.StringWidth(overlay)
-
-	var result strings.Builder
-
-	// Part 1: Prefix (base content from 0 to x)
-	if x > 0 {
-		if x <= baseWidth {
-			prefix := ansi.Cut(baseLine, 0, x)
-			result.WriteString(prefix)
-		} else {
-			// Base is shorter than x position
-			result.WriteString(baseLine)
-			result.WriteString("\x1b[0m") // Reset any styles from base
-			result.WriteString(strings.Repeat(" ", x-baseWidth))
-		}
-	}
-
-	// Part 2: Reset styles, then add the overlay
-	result.WriteString("\x1b[0m")
-	result.WriteString(overlay)
-	result.WriteString("\x1b[0m")
-
-	// Part 3: Suffix (base content after the overlay)
-	suffixStart := x + overlayWidth
-	if suffixStart < baseWidth {
-		suffix := ansi.Cut(baseLine, suffixStart, baseWidth)
-		result.WriteString(suffix)
-	}
-
-	return result.String()
-}
-
 // clamp constrains a value to the range [min, max]
 func clamp(value, minVal, maxVal int) int {
 	if value < minVal {

@@ -592,7 +592,8 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	if cpuTotalMillis > 0 {
 		cpuPercent = float64(cpuUsedMillis) / float64(cpuTotalMillis) * 100
 	}
-	content.WriteString(fmt.Sprintf("%s   %.2f / %.2f cores (%.1f%%)\n",
+	// Align "CPU:" (4 chars) with "Memory:" (7 chars) by adding 3 spaces padding
+	content.WriteString(fmt.Sprintf("  %s   %.2f / %.2f cores (%.1f%%)\n",
 		labelStyle.Render("CPU:"),
 		float64(cpuUsedMillis)/1000,
 		float64(cpuTotalMillis)/1000,

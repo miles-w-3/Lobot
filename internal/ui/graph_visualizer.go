@@ -348,12 +348,12 @@ func (m GraphVisualizerModel) Update(msg tea.Msg) (GraphVisualizerModel, tea.Cmd
 		switch {
 		// Arrow keys for node selection
 		case key.Matches(msg, m.keys.Up):
-			m.navigateUp()
+			m.navigateHierarchicalUp()
 			m.ensureSelectedVisible()
 			m.updateViewportContent()
 			return m, nil
 		case key.Matches(msg, m.keys.Down):
-			m.navigateDown()
+			m.navigateHierarchicalDown()
 			m.ensureSelectedVisible()
 			m.updateViewportContent()
 			return m, nil
@@ -403,6 +403,52 @@ func (m GraphVisualizerModel) Update(msg tea.Msg) (GraphVisualizerModel, tea.Cmd
 func (m *GraphVisualizerModel) navigateUp() {
 	if m.selectedIndex > 0 {
 		m.selectedIndex--
+	}
+}
+
+// navigateHierarchicalDown attempts to select the first child of the current node.
+// If no child exists, it does nothing
+func (m *GraphVisualizerModel) navigateHierarchicalDown() {
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.flattenedNodes) {
+		return
+	}
+
+	currentNode := m.flattenedNodes[m.selectedIndex]
+	children := m.graph.GetChildren(currentNode)
+
+	if len(children) > 0 {
+		// Target the first child
+		target := children[0]
+
+		// Find target index in flattened list
+		for i, n := range m.flattenedNodes {
+			if n == target {
+				m.selectedIndex = i
+				return
+			}
+		}
+	}
+}
+
+func (m *GraphVisualizerModel) navigateHierarchicalUp() {
+	if m.selectedIndex < 0 || m.selectedIndex >= len(m.flattenedNodes) {
+		return
+	}
+
+	currentNode := m.flattenedNodes[m.selectedIndex]
+	parents := m.graph.GetParents(currentNode)
+
+	if len(parents) > 0 {
+		// Target the first parent
+		target := parents[0]
+
+		// Find target index in flattened list
+		for i, n := range m.flattenedNodes {
+			if n == target {
+				m.selectedIndex = i
+				return
+			}
+		}
 	}
 }
 

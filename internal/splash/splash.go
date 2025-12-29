@@ -76,7 +76,6 @@ func longTick() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
-	m.logger.Debug("Running update in", "type", msg, "mode", m.phase, "err", m.errorMessage)
 	switch msg.(type) {
 	case TickMsg:
 		switch m.phase {
