@@ -3,8 +3,11 @@ package ui
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
@@ -122,12 +125,14 @@ func (m *GraphVisualizerModel) updateViewportContent() {
 	log.Printf("[GraphVisualizer] Phase 2 - Edge drawing (%d edges): %v", len(m.graph.Edges), time.Since(phaseStart))
 	phaseStart = time.Now()
 
-	// 2. Get canvas lines as the base
-	lines := canvas.Lines()
-	log.Printf("[GraphVisualizer] Phase 3 - Canvas to lines: %v", time.Since(phaseStart))
-	phaseStart = time.Now()
+	// 2. Prepare node box fragments (bucketed by Y position)
+	// This avoids repeatedly scanning lines and manipulating strings
+	type nodeSegment struct {
+		x       int
+		content string
+	}
+	segmentsByRow := make(map[int][]nodeSegment)
 
-	// 3. Overlay styled boxes onto canvas lines
 	for i, node := range m.flattenedNodes {
 		pos, exists := m.layout.nodePositions[node]
 		if !exists {
@@ -138,15 +143,74 @@ func (m *GraphVisualizerModel) updateViewportContent() {
 		box := m.renderNodeBox(node, selected)
 		boxLines := strings.Split(box, "\n")
 
-		// Overlay each line of the box
-		for dy, boxLine := range boxLines {
+		for dy, line := range boxLines {
 			y := pos.Y + dy
-			if y >= 0 && y < len(lines) {
-				lines[y] = OverlayStyledContent(lines[y], boxLine, pos.X)
+			if y >= 0 && y < m.canvasHeight {
+				segmentsByRow[y] = append(segmentsByRow[y], nodeSegment{
+					x:       pos.X,
+					content: line,
+				})
 			}
 		}
 	}
-	log.Printf("[GraphVisualizer] Phase 4 - Box overlay (%d nodes): %v", len(m.flattenedNodes), time.Since(phaseStart))
+	log.Printf("[GraphVisualizer] Phase 3 - Box preparation (%d nodes): %v", len(m.flattenedNodes), time.Since(phaseStart))
+	phaseStart = time.Now()
+
+	// 3. Render final lines by stitching background and segments
+	// This is much faster than repeatedly calling OverlayStyledContent
+	lines := make([]string, m.canvasHeight)
+
+	for y := 0; y < m.canvasHeight; y++ {
+		rowSegments := segmentsByRow[y]
+
+		// If no segments on this line, just use the background line
+		if len(rowSegments) == 0 {
+			lines[y] = string(canvas.Row(y))
+			continue
+		}
+
+		// Sort segments by X position
+		sort.Slice(rowSegments, func(i, j int) bool {
+			return rowSegments[i].x < rowSegments[j].x
+		})
+
+		var sb strings.Builder
+		cursor := 0
+		bgRow := canvas.Row(y)
+		bgLen := len(bgRow)
+
+		for _, seg := range rowSegments {
+			// Append background up to the segment start
+			if seg.x > cursor {
+				if cursor < bgLen {
+					limit := seg.x
+					if limit > bgLen {
+						limit = bgLen
+					}
+					sb.WriteString(string(bgRow[cursor:limit]))
+				} else {
+					// Pad with spaces if we're past the background width
+					sb.WriteString(strings.Repeat(" ", seg.x-cursor))
+				}
+				cursor = seg.x
+			}
+
+			// Append the segment
+			sb.WriteString(seg.content)
+
+			// Move cursor past the segment using visual width
+			cursor += ansi.StringWidth(seg.content)
+		}
+
+		// Append any remaining background
+		if cursor < bgLen {
+			sb.WriteString(string(bgRow[cursor:]))
+		}
+
+		lines[y] = sb.String()
+	}
+
+	log.Printf("[GraphVisualizer] Phase 4 - Line stitching: %v", time.Since(phaseStart))
 	phaseStart = time.Now()
 
 	// 4. Set the full content on the 2D viewport

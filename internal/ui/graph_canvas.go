@@ -42,6 +42,15 @@ func (c *Canvas) Get(x, y int) rune {
 	return ' '
 }
 
+// Row returns the raw rune slice for a specific row
+// Use this for read-only access to the grid for performance
+func (c *Canvas) Row(y int) []rune {
+	if y >= 0 && y < c.height {
+		return c.grid[y]
+	}
+	return nil
+}
+
 // DrawEdge draws a connection line from one position to another
 func (c *Canvas) DrawEdge(from, to Position) {
 	fromCenterX := from.X + from.Width/2

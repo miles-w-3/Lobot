@@ -592,7 +592,7 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	if cpuTotalMillis > 0 {
 		cpuPercent = float64(cpuUsedMillis) / float64(cpuTotalMillis) * 100
 	}
-	content.WriteString(fmt.Sprintf("%s %.2f / %.2f cores (%.1f%%)\n",
+	content.WriteString(fmt.Sprintf("%s   %.2f / %.2f cores (%.1f%%)\n",
 		labelStyle.Render("CPU:"),
 		float64(cpuUsedMillis)/1000,
 		float64(cpuTotalMillis)/1000,
@@ -603,7 +603,7 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	if memTotalBytes > 0 {
 		memPercent = float64(memUsedBytes) / float64(memTotalBytes) * 100
 	}
-	content.WriteString(fmt.Sprintf("  %s %s / %s (%.1f%%)\n",
+	content.WriteString(fmt.Sprintf("%s %s / %s (%.1f%%)\n",
 		labelStyle.Render("Memory:"),
 		formatBytes(memUsedBytes),
 		formatBytes(memTotalBytes),

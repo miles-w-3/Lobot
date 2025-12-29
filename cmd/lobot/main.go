@@ -105,7 +105,6 @@ func run() error {
 
 	// Forward messages into the model and UI
 	processUpdateCallback := func(update k8s.ServiceUpdate) {
-		logger.Debug("Processing update callback", "type", update.Type, "context", update.Context)
 		switch update.Type {
 		case k8s.ServiceUpdateResources:
 			p.Send(ui.ResourceUpdateMsg{})

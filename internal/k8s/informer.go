@@ -816,9 +816,6 @@ func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp
 		}
 
 		helmSecretCount++
-		im.logger.Debug("Found Helm release secret",
-			"name", secret.GetName(),
-			"namespace", secret.GetNamespace())
 
 		// Decode the Helm release directly from cached unstructured data
 		// This avoids making individual API calls that cause rate limiting
@@ -905,7 +902,5 @@ func (im *InformerManager) sendCallback(callbackDetails ServiceUpdate) {
 	if im.isInitialized {
 		im.logger.Debug("Sending update callback")
 		im.updateCallback(callbackDetails)
-	} else {
-		im.logger.Debug("Not sending update callback")
 	}
 }
