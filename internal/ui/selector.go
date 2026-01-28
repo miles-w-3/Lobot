@@ -6,7 +6,9 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/erikgeiser/promptkit/selection"
+	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 )
 
 // SelectorType represents the type of selector
@@ -20,9 +22,10 @@ const (
 
 // SelectorModel wraps the promptkit selection model
 type SelectorModel struct {
-	selection    *selection.Model[string]
-	selectorType SelectorType
-	visible      bool
+	selection      *selection.Model[string]
+	selectorType   SelectorType
+	visible        bool
+	globalRegistry *command.Registry[keys.GlobalCmd]
 }
 
 // SelectorFinishedMsg is sent when a selector finishes
@@ -33,7 +36,7 @@ type SelectorFinishedMsg struct {
 }
 
 // NewNamespaceSelector creates a new namespace selector
-func NewNamespaceSelector(namespaces []string, current string) *SelectorModel {
+func NewNamespaceSelector(namespaces []string, current string, registry *command.Registry[keys.GlobalCmd]) *SelectorModel {
 	// Add <all> option at the top
 	choices := append([]string{"<all>"}, namespaces...)
 
@@ -46,14 +49,15 @@ func NewNamespaceSelector(namespaces []string, current string) *SelectorModel {
 	model := selection.NewModel(sel)
 
 	return &SelectorModel{
-		selection:    model,
-		selectorType: SelectorTypeNamespace,
-		visible:      true,
+		selection:      model,
+		selectorType:   SelectorTypeNamespace,
+		visible:        true,
+		globalRegistry: registry,
 	}
 }
 
 // NewContextSelector creates a new context selector
-func NewContextSelector(contexts []string, current string) *SelectorModel {
+func NewContextSelector(contexts []string, current string, registry *command.Registry[keys.GlobalCmd]) *SelectorModel {
 	sel := selection.New("Select Cluster Context:", contexts)
 	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
 	sel.LoopCursor = true
@@ -62,9 +66,10 @@ func NewContextSelector(contexts []string, current string) *SelectorModel {
 	model := selection.NewModel(sel)
 
 	return &SelectorModel{
-		selection:    model,
-		selectorType: SelectorTypeContext,
-		visible:      true,
+		selection:      model,
+		selectorType:   SelectorTypeContext,
+		visible:        true,
+		globalRegistry: registry,
 	}
 }
 
@@ -79,35 +84,16 @@ func (s *SelectorModel) Update(msg tea.Msg) (*SelectorModel, tea.Cmd) {
 		return s, nil
 	}
 
-	// Check for esc to cancel
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		if keyMsg.String() == "esc" {
-			s.visible = false
-			return s, func() tea.Msg {
-				return SelectorFinishedMsg{
-					SelectorType: s.selectorType,
-					Cancelled:    true,
-				}
-			}
-		}
-
-		// Check for enter to confirm selection
-		if keyMsg.String() == "enter" {
-			choice, err := s.selection.Value()
-			s.visible = false
-			if err != nil {
+		if cmd, err := s.globalRegistry.Dispatch(keyMsg); err == nil {
+			switch cmd {
+			case keys.GlobalCmdQuit, keys.GlobalCmdHelp:
+				s.visible = false
 				return s, func() tea.Msg {
 					return SelectorFinishedMsg{
 						SelectorType: s.selectorType,
 						Cancelled:    true,
 					}
-				}
-			}
-			return s, func() tea.Msg {
-				return SelectorFinishedMsg{
-					SelectedValue: choice,
-					SelectorType:  s.selectorType,
-					Cancelled:     false,
 				}
 			}
 		}
@@ -180,7 +166,7 @@ func (m *Model) getAvailableContexts() []string {
 func (m *Model) OpenNamespaceSelector() tea.Cmd {
 	namespaces := m.getAllNamespaces()
 	current := m.namespaceFilter.GetPattern()
-	m.selector = NewNamespaceSelector(namespaces, current)
+	m.selector = NewNamespaceSelector(namespaces, current, m.globalRegistry)
 	return m.selector.Init()
 }
 
@@ -188,7 +174,7 @@ func (m *Model) OpenNamespaceSelector() tea.Cmd {
 func (m *Model) OpenContextSelector() tea.Cmd {
 	contexts := m.getAvailableContexts()
 	current := m.resourceService.GetCurrentContext()
-	m.selector = NewContextSelector(contexts, current)
+	m.selector = NewContextSelector(contexts, current, m.globalRegistry)
 	return m.selector.Init()
 }
 
@@ -205,7 +191,7 @@ func (m *Model) ApplyNamespaceSelection(namespace string) {
 }
 
 // NewResourceTypeSelector creates a new resource type selector
-func NewResourceTypeSelector(resourceTypes []string) *SelectorModel {
+func NewResourceTypeSelector(resourceTypes []string, registry *command.Registry[keys.GlobalCmd]) *SelectorModel {
 	sel := selection.New("Select Resource Type:", resourceTypes)
 	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
 	sel.LoopCursor = true
@@ -214,16 +200,17 @@ func NewResourceTypeSelector(resourceTypes []string) *SelectorModel {
 	model := selection.NewModel(sel)
 
 	return &SelectorModel{
-		selection:    model,
-		selectorType: SelectorTypeResourceType,
-		visible:      true,
+		selection:      model,
+		selectorType:   SelectorTypeResourceType,
+		visible:        true,
+		globalRegistry: registry,
 	}
 }
 
 // OpenResourceTypeSelector opens the resource type selector
 func (m *Model) OpenResourceTypeSelector() tea.Cmd {
 	resourceTypes := m.getAllResourceTypes()
-	m.selector = NewResourceTypeSelector(resourceTypes)
+	m.selector = NewResourceTypeSelector(resourceTypes, m.globalRegistry)
 	return m.selector.Init()
 }
 
@@ -298,5 +285,3 @@ func (m *Model) ApplyResourceTypeSelection(displayName string) tea.Cmd {
 	// Start informer for this type with splash screen
 	return m.startInformerWithSplash(selectedType)
 }
-
-

@@ -5,11 +5,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 )
 
 // podColors defines a consistent color palette for pod visualization.
@@ -43,99 +43,37 @@ const (
 	FocusPanelPods
 )
 
-// UtilizationDashboardKeyMap defines key bindings for the utilization dashboard
-type UtilizationDashboardKeyMap struct {
-	Up          key.Binding
-	Down        key.Binding
-	Left        key.Binding
-	Right       key.Binding
-	SwitchPanel key.Binding
-	Details     key.Binding
-	Back        key.Binding
-}
-
-// DefaultUtilizationDashboardKeyMap returns the default key bindings
-func DefaultUtilizationDashboardKeyMap() UtilizationDashboardKeyMap {
-	return UtilizationDashboardKeyMap{
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "move up"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "move down"),
-		),
-		Left: key.NewBinding(
-			key.WithKeys("left", "h"),
-			key.WithHelp("←/h", "CPU"),
-		),
-		Right: key.NewBinding(
-			key.WithKeys("right", "l"),
-			key.WithHelp("→/l", "Memory"),
-		),
-		SwitchPanel: key.NewBinding(
-			key.WithKeys("tab"),
-			key.WithHelp("tab", "switch panel"),
-		),
-		Details: key.NewBinding(
-			key.WithKeys("d"),
-			key.WithHelp("d", "node details"),
-		),
-		Back: key.NewBinding(
-			key.WithKeys("esc", "q"),
-			key.WithHelp("esc/q", "back"),
-		),
-	}
-}
-
-// ShortHelp returns a short list of key bindings
-func (k UtilizationDashboardKeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Left, k.Right, k.Details, k.Back}
-}
-
-// FullHelp returns the full list of key bindings organized by category
-func (k UtilizationDashboardKeyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Up, k.Down},
-		{k.Left, k.Right},
-		{k.SwitchPanel, k.Details},
-		{k.Back},
-	}
-}
-
 // UtilizationDashboardModel manages the utilization dashboard view
 type UtilizationDashboardModel struct {
-	nodeMetrics      []k8s.NodeMetrics
-	podMetrics       []k8s.PodMetrics
-	filteredPods     []k8s.PodMetrics
-	selectedNode     int // -1 means <All> is selected
-	selectedPod      int
-	focusedPanel     FocusedPanel
-	resourceCategory ResourceCategory
-	width            int
-	height           int
-	keys             UtilizationDashboardKeyMap
-	help             help.Model
-	showNodeDetails  bool             // Modal for node details
-	modalSelectedPod int              // Selected pod within modal
-	modalPods        []k8s.PodMetrics // Pods displayed in modal
+	nodeMetrics         []k8s.NodeMetrics
+	podMetrics          []k8s.PodMetrics
+	filteredPods        []k8s.PodMetrics
+	selectedNode        int
+	selectedPod         int
+	focusedPanel        FocusedPanel
+	resourceCategory    ResourceCategory
+	width               int
+	height              int
+	showNodeDetails     bool
+	modalSelectedPod    int
+	modalPods           []k8s.PodMetrics
+	utilizationRegistry *command.Registry[keys.UtilizationCmd]
 }
 
 // NewUtilizationDashboardModel creates a new utilization dashboard
-func NewUtilizationDashboardModel(nodes []k8s.NodeMetrics, pods []k8s.PodMetrics, width, height int) UtilizationDashboardModel {
+func NewUtilizationDashboardModel(nodes []k8s.NodeMetrics, pods []k8s.PodMetrics, width, height int, registry *command.Registry[keys.UtilizationCmd]) UtilizationDashboardModel {
 	m := UtilizationDashboardModel{
-		nodeMetrics:      nodes,
-		podMetrics:       pods,
-		selectedNode:     -1, // Start with <All> selected
-		selectedPod:      0,
-		focusedPanel:     FocusPanelNodes,
-		resourceCategory: ResourceCategoryCPU,
-		width:            width,
-		height:           height,
-		keys:             DefaultUtilizationDashboardKeyMap(),
-		help:             help.New(),
-		showNodeDetails:  false,
-		modalSelectedPod: 0,
+		nodeMetrics:         nodes,
+		podMetrics:          pods,
+		selectedNode:        -1,
+		selectedPod:         0,
+		focusedPanel:        FocusPanelNodes,
+		resourceCategory:    ResourceCategoryCPU,
+		width:               width,
+		height:              height,
+		showNodeDetails:     false,
+		modalSelectedPod:    0,
+		utilizationRegistry: registry,
 	}
 	m.filterPodsByNode()
 	return m
@@ -187,96 +125,60 @@ func (m *UtilizationDashboardModel) resortModalPods() {
 func (m UtilizationDashboardModel) Update(msg tea.Msg) (UtilizationDashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// Handle node details modal
-		if m.showNodeDetails {
-			switch msg.String() {
-			case "esc", "q", "d":
+		if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil {
+			switch cmd {
+			case keys.UtilizationCmdBack:
 				m.showNodeDetails = false
-			case ",", "h": // Previous pod (horizontal)
-				if m.modalSelectedPod > 0 {
-					m.modalSelectedPod--
-				}
-			case ".", "l": // Next pod (horizontal)
-				if m.modalSelectedPod < len(m.modalPods)-1 {
-					m.modalSelectedPod++
-				}
-			case "left": // Switch to CPU
-				m.resourceCategory = ResourceCategoryCPU
-				m.resortModalPods()
-			case "right": // Switch to Memory
-				m.resourceCategory = ResourceCategoryMemory
-				m.resortModalPods()
-			}
-			return m, nil
-		}
-
-		switch {
-		case key.Matches(msg, m.keys.Up):
-			if m.focusedPanel == FocusPanelNodes {
-				if m.selectedNode > -1 { // -1 is <All>, minimum
-					m.selectedNode--
-					m.filterPodsByNode()
-				}
-			} else {
-				if m.selectedPod > 0 {
-					m.selectedPod--
-				}
-			}
-
-		case key.Matches(msg, m.keys.Down):
-			if m.focusedPanel == FocusPanelNodes {
-				if m.selectedNode < len(m.nodeMetrics)-1 {
-					m.selectedNode++
-					m.filterPodsByNode()
-				}
-			} else {
-				if m.selectedPod < len(m.filteredPods)-1 {
-					m.selectedPod++
-				}
-			}
-
-		case key.Matches(msg, m.keys.Left):
-			m.resourceCategory = ResourceCategoryCPU
-
-		case key.Matches(msg, m.keys.Right):
-			m.resourceCategory = ResourceCategoryMemory
-
-		case key.Matches(msg, m.keys.SwitchPanel):
-			if m.focusedPanel == FocusPanelNodes {
-				m.focusedPanel = FocusPanelPods
-			} else {
-				m.focusedPanel = FocusPanelNodes
-			}
-
-		case key.Matches(msg, m.keys.Details):
-			// Show details - works for both specific node and <All>
-			if m.focusedPanel == FocusPanelNodes {
-				m.modalPods = make([]k8s.PodMetrics, 0)
-				if m.selectedNode == -1 {
-					// <All> selected - include all pods
-					m.modalPods = append(m.modalPods, m.podMetrics...)
-				} else if m.selectedNode >= 0 && m.selectedNode < len(m.nodeMetrics) {
-					// Specific node selected
-					node := m.nodeMetrics[m.selectedNode]
-					for _, pod := range m.podMetrics {
-						if pod.NodeName == node.Name {
-							m.modalPods = append(m.modalPods, pod)
-						}
+			case keys.UtilizationCmdScrollUp:
+				if m.focusedPanel == FocusPanelNodes {
+					if m.selectedNode > -1 {
+						m.selectedNode--
+						m.filterPodsByNode()
+					}
+				} else {
+					if m.selectedPod > 0 {
+						m.selectedPod--
 					}
 				}
-				// Sort by usage descending
-				if m.resourceCategory == ResourceCategoryCPU {
-					sort.Slice(m.modalPods, func(i, j int) bool {
-						return m.modalPods[i].CPUUsage.MilliValue() > m.modalPods[j].CPUUsage.MilliValue()
-					})
+			case keys.UtilizationCmdScrollDown:
+				if m.focusedPanel == FocusPanelNodes {
+					if m.selectedNode < len(m.nodeMetrics)-1 {
+						m.selectedNode++
+						m.filterPodsByNode()
+					}
 				} else {
-					sort.Slice(m.modalPods, func(i, j int) bool {
-						return m.modalPods[i].MemoryUsage.Value() > m.modalPods[j].MemoryUsage.Value()
-					})
+					if m.selectedPod < len(m.filteredPods)-1 {
+						m.selectedPod++
+					}
 				}
-				m.modalSelectedPod = 0
-				m.showNodeDetails = true
+			case keys.UtilizationCmdPageUp:
+				if m.showNodeDetails {
+					if m.modalSelectedPod > 0 {
+						m.modalSelectedPod--
+					}
+				} else if m.focusedPanel == FocusPanelNodes {
+					m.selectedNode = max(-1, m.selectedNode-5)
+					m.filterPodsByNode()
+				} else {
+					m.selectedPod = max(0, m.selectedPod-10)
+				}
+			case keys.UtilizationCmdPageDown:
+				if m.showNodeDetails {
+					if m.modalSelectedPod < len(m.modalPods)-1 {
+						m.modalSelectedPod++
+					}
+				} else if m.focusedPanel == FocusPanelNodes {
+					m.selectedNode = min(len(m.nodeMetrics)-1, m.selectedNode+5)
+					m.filterPodsByNode()
+				} else {
+					m.selectedPod = min(len(m.filteredPods)-1, m.selectedPod+10)
+				}
+			case keys.UtilizationCmdPrevView:
+				m.resourceCategory = ResourceCategoryCPU
+			case keys.UtilizationCmdNextView:
+				m.resourceCategory = ResourceCategoryMemory
 			}
+			return m, nil
 		}
 
 	case tea.WindowSizeMsg:
@@ -313,17 +215,12 @@ func (m *UtilizationDashboardModel) View() string {
 	// Join panels horizontally
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, nodesPanel, podsPanel)
 
-	// Footer with help
-	footer := m.help.View(m.keys)
-
 	// Build full view
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		tabBar,
 		"",
 		panels,
-		"",
-		footer,
 	)
 
 	// Wrap in border
@@ -874,11 +771,6 @@ func (m *UtilizationDashboardModel) calculateMemoryPercentage(node k8s.NodeMetri
 		return 0
 	}
 	return float64(usageBytes) / float64(capacityBytes) * 100
-}
-
-// GetKeyMap returns the key map for help display
-func (m *UtilizationDashboardModel) GetKeyMap() help.KeyMap {
-	return m.keys
 }
 
 // formatBytes formats bytes into human readable format

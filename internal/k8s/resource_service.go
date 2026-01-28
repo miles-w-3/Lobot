@@ -292,7 +292,6 @@ func (svc *ResourceService) initializeInformer() error {
 		if err := informer.StartInformer(svc.ctx, rt); err != nil {
 			svc.logger.Warn("Failed to start informer", "resource", rt.DisplayName, "error", err)
 		}
-		svc.logger.Debug("Another one")
 	}
 
 	svc.logger.Debug("Done starting informers!")

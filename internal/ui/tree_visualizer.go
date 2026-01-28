@@ -4,12 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 )
 
 const (
@@ -29,9 +30,9 @@ type TreeVisualizerModel struct {
 	focusedPanel    FocusPanel
 	selectedIndex   int
 	flattenedNodes  []*treeNode
-	expandedNodes   map[*graph.Node]bool  // Track which nodes are expanded
+	expandedNodes   map[*graph.Node]bool // Track which nodes are expanded
 	rootResource    k8s.TrackedObject
-	keys            TreeVisualizerKeyMap
+	registry        *command.Registry[keys.TreeCmd]
 	detailsViewport viewport.Model
 }
 
@@ -44,14 +45,14 @@ type treeNode struct {
 }
 
 // NewTreeVisualizerModel creates a new tree visualizer with viewport-based scrolling
-func NewTreeVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) TreeVisualizerModel {
+func NewTreeVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int, registry *command.Registry[keys.TreeCmd]) TreeVisualizerModel {
 	// Calculate panel widths
-	detailsWidth := 35  // Reduced from 40 to give more space to tree
-	treeWidth := width - detailsWidth - 2  // Account for gap between panels
+	detailsWidth := 35                    // Reduced from 40 to give more space to tree
+	treeWidth := width - detailsWidth - 2 // Account for gap between panels
 
 	// Create main tree viewport (account for border + padding = 4 total)
 	treeViewportWidth := treeWidth - 4
-	treeViewportHeight := height - 8  // Account for title, border, help
+	treeViewportHeight := height - 8 // Account for title, border, help
 
 	treeViewport := viewport.New(treeViewportWidth, treeViewportHeight)
 
@@ -73,7 +74,7 @@ func NewTreeVisualizerModel(resourceGraph *graph.ResourceGraph, width, height in
 		selectedIndex:   0,
 		expandedNodes:   make(map[*graph.Node]bool),
 		rootResource:    resourceGraph.Root.Resource,
-		keys:            DefaultTreeVisualizerKeyMap(),
+		registry:        registry,
 	}
 
 	// Expand all nodes by default
@@ -294,81 +295,85 @@ func (m TreeVisualizerModel) Update(msg tea.Msg) (TreeVisualizerModel, tea.Cmd) 
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		case key.Matches(msg, m.keys.FocusLeft):
-			if m.showDetails {
-				m.focusedPanel = FocusTree
-			}
-			return m, nil
+		if dispatchedCmd, err := m.registry.Dispatch(msg); err == nil {
+			switch dispatchedCmd {
+			case keys.TreeCmdFocusLeft:
+				if m.showDetails {
+					m.focusedPanel = FocusTree
+				}
+				return m, nil
 
-		case key.Matches(msg, m.keys.FocusRight):
-			if m.showDetails {
-				m.focusedPanel = FocusDetails
-			}
-			return m, nil
+			case keys.TreeCmdFocusRight:
+				if m.showDetails {
+					m.focusedPanel = FocusDetails
+				}
+				return m, nil
 
-		case key.Matches(msg, m.keys.ToggleDetails):
-			m.showDetails = !m.showDetails
-			if !m.showDetails {
-				m.focusedPanel = FocusTree
+			case keys.TreeCmdToggleDetails:
+				m.showDetails = !m.showDetails
+				if !m.showDetails {
+					m.focusedPanel = FocusTree
+				}
+				return m, nil
+
+			case keys.TreeCmdBack:
+				// Let parent handle back
+				return m, nil
 			}
-			return m, nil
+
+			// Route navigation commands to the focused panel
+			if m.focusedPanel == FocusTree {
+				switch dispatchedCmd {
+				case keys.TreeCmdMoveUp:
+					m.navigateUp()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdMoveDown:
+					m.navigateDown()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdHome:
+					m.navigateTop()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdEnd:
+					m.navigateBottom()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdPageUp:
+					m.pageUp()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdPageDown:
+					m.pageDown()
+					m.updateViewportContent()
+					return m, nil
+
+				case keys.TreeCmdToggle:
+					m.toggleCurrentNode()
+					return m, nil
+
+				case keys.TreeCmdExpandAll:
+					m.expandAll()
+					return m, nil
+
+				case keys.TreeCmdCollapseAll:
+					m.collapseAll()
+					return m, nil
+				}
+			}
 		}
 	}
 
-	// Route navigation to the focused panel
+	// Handle viewport updates
 	if m.focusedPanel == FocusTree {
-		switch msg := msg.(type) {
-		case tea.KeyMsg:
-			switch {
-			case key.Matches(msg, m.keys.Up):
-				m.navigateUp()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.Down):
-				m.navigateDown()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.Home):
-				m.navigateTop()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.End):
-				m.navigateBottom()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.PageUp):
-				m.pageUp()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.PageDown):
-				m.pageDown()
-				m.updateViewportContent()
-				return m, nil
-
-			case key.Matches(msg, m.keys.Toggle):
-				m.toggleCurrentNode()
-				return m, nil
-
-			case key.Matches(msg, m.keys.ExpandAll):
-				m.expandAll()
-				return m, nil
-
-			case key.Matches(msg, m.keys.CollapseAll):
-				m.collapseAll()
-				return m, nil
-			}
-		}
-
-		// Also allow viewport scrolling with the tree focused
 		m.viewport, cmd = m.viewport.Update(msg)
 	} else if m.focusedPanel == FocusDetails && m.showDetails {
-		// Update details viewport for scrolling
 		m.detailsViewport, cmd = m.detailsViewport.Update(msg)
 	}
 
@@ -525,20 +530,10 @@ func (m *TreeVisualizerModel) renderTreeView() string {
 		Width(treeWidth).
 		Height(m.height - 4)
 
-	// Generate help text from keybindings
-	helpKeys := []string{}
-	for _, binding := range m.keys.ShortHelp() {
-		helpKeys = append(helpKeys, binding.Help().Key+" "+binding.Help().Desc)
-	}
-	helpText := lipgloss.NewStyle().
-		Foreground(ColorMuted).
-		Render(strings.Join(helpKeys, " • "))
-
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		treeBox.Render(m.viewport.View()),
-		helpText,
 	)
 }
 
@@ -558,4 +553,3 @@ func (m *TreeVisualizerModel) renderDetailsPanel() string {
 
 	return detailsBox.Render(m.detailsViewport.View())
 }
-

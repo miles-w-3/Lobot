@@ -76,8 +76,7 @@ var (
 
 	// Help text styles
 	helpStyle = lipgloss.NewStyle().
-			Foreground(colorMuted).
-			Italic(true)
+			Foreground(colorMuted)
 
 	keyStyle = lipgloss.NewStyle().
 			Foreground(colorSecondary).

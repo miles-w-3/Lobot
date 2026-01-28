@@ -7,6 +7,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/miles-w-3/lobot/internal/command"
 )
 
 // View renders the UI
@@ -32,6 +33,11 @@ func (m Model) View() string {
 	// If modal is visible (including help modal), render it as an overlay
 	if m.modal.IsVisible() {
 		return m.renderModalOverlay(baseView)
+	}
+
+	// If palette is visible, render it as an overlay
+	if m.paletteVisible {
+		return m.renderPaletteOverlay(baseView)
 	}
 
 	return baseView
@@ -246,29 +252,41 @@ func (m Model) renderStatusBar() string {
 	return statusBarStyle.Render(strings.Join(parts, "  "))
 }
 
-// renderHelp renders the help text using the KeyMap system
+// renderHelp renders the help text using the command registry
 func (m Model) renderHelp() string {
-	// Use the modal's help model for rendering
-	helpModel := m.modal.helpModel
+	separator := command.DefaultHelpStyles.ShortSeparator.Render(" • ")
 
-	// Get the appropriate keymap for current mode
-	var helpView string
+	// Always show global help first
+	helpView := m.globalRegistry.ShortView()
 
-	switch m.viewMode {
-	case ViewModeFilter:
-		helpView = helpModel.ShortHelpView(m.filterKeys.ShortHelp())
-	case ViewModeManifest:
-		// Combine mode-specific and global help
-		keys := append(m.manifestKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = helpModel.ShortHelpView(keys)
-	case ViewModeVisualize:
-		keys := append(m.visualizerKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = helpModel.ShortHelpView(keys)
-	case ViewModeNormal:
-		keys := append(m.normalKeys.ShortHelp(), m.globalKeys.ShortHelp()...)
-		helpView = helpModel.ShortHelpView(keys)
-	default:
-		helpView = helpModel.ShortHelpView(m.globalKeys.ShortHelp())
+	// Special handling for visualizer mode to combine registries
+	if m.viewMode == ViewModeVisualize && m.visualizer != nil {
+		// Show visualizer common commands (Toggle Mode, Back, etc.)
+		visHelp := m.visualizerRegistry.ShortView()
+		if visHelp != "" {
+			helpView += separator + visHelp
+		}
+
+		// Show specific mode commands
+		var specificHelp string
+		if m.visualizer.mode == VisualizationModeGraph {
+			specificHelp = m.graphRegistry.ShortView()
+		} else {
+			specificHelp = m.treeRegistry.ShortView()
+		}
+
+		if specificHelp != "" {
+			helpView += separator + specificHelp
+		}
+
+		return helpStyle.Render(helpView)
+	}
+
+	// Append current mode help if different from global
+	// Note: ShortView returns empty string if no help items
+	modeHelp := m.CurrentRegistry().ShortView()
+	if modeHelp != "" {
+		helpView += separator + modeHelp
 	}
 
 	return helpStyle.Render(helpView)
@@ -280,6 +298,12 @@ func (m Model) renderModalOverlay(baseView string) string {
 
 	// Center and overlay the modal on the base view
 	return overlayCenter(baseView, modalView, m.width, m.height)
+}
+
+// renderPaletteOverlay renders the palette as an overlay
+func (m Model) renderPaletteOverlay(baseView string) string {
+	paletteView := m.paletteModel.View()
+	return overlayCenter(baseView, paletteView, m.width, m.height)
 }
 
 // renderSelectorOverlay renders the selector as an overlay on top of the base view
@@ -335,7 +359,14 @@ func (m Model) renderVisualizeView() string {
 		return "Building resource graph..."
 	}
 
-	return m.visualizer.View()
+	content := m.visualizer.View()
+	help := m.renderHelp()
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		content,
+		help,
+	)
 }
 
 // renderUtilizationView renders the utilization dashboard
@@ -344,7 +375,14 @@ func (m Model) renderUtilizationView() string {
 		return "Loading metrics..."
 	}
 
-	return m.utilizationDashboard.View()
+	content := m.utilizationDashboard.View()
+	help := m.renderHelp()
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		content,
+		help,
+	)
 }
 
 // overlayCenter overlays content centered on a base view

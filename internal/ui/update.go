@@ -2,11 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 	"github.com/miles-w-3/lobot/internal/splash"
 )
 
@@ -26,6 +27,19 @@ type MetricsDataMsg struct {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
+
+	// Handle palette input if visible
+	if m.paletteVisible {
+		var cmd tea.Cmd
+		// Start Check for Esc
+		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
+			m.paletteVisible = false
+			return m, nil
+		}
+		// End Check
+		m.paletteModel, cmd = m.paletteModel.Update(msg)
+		return m, cmd
+	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -110,7 +124,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Build the graph for the resource
 		if msg.Resource != nil {
 			resourceGraph := m.graphBuilder.BuildGraph(msg.Resource)
-			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height)
+			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height, m.visualizerRegistry, m.treeRegistry, m.graphRegistry)
 			m.visualizer = &visualizer
 			m.viewMode = ViewModeVisualize
 		}
@@ -136,9 +150,44 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		// Create and show the utilization dashboard
-		dashboard := NewUtilizationDashboardModel(msg.NodeMetrics, msg.PodMetrics, m.width, m.height)
+		dashboard := NewUtilizationDashboardModel(msg.NodeMetrics, msg.PodMetrics, m.width, m.height, m.utilizationRegistry)
 		m.utilizationDashboard = &dashboard
 		m.viewMode = ViewModeUtilization
+		return m, nil
+
+	case PaletteSelectedMsg:
+		m.paletteVisible = false
+		key := msg.Entry.Key
+		// Dispatch logic (Global then Mode)
+
+		// Global
+		if cmd, err := m.globalRegistry.DispatchString(key); err == nil {
+			return m.handleGlobalCommand(cmd)
+		}
+
+		// Mode specific
+		switch m.viewMode {
+		case ViewModeNormal:
+			if cmd, err := m.normalRegistry.DispatchString(key); err == nil {
+				return m.handleNormalCommand(cmd)
+			}
+		case ViewModeFilter:
+			if cmd, err := m.filterRegistry.DispatchString(key); err == nil {
+				return m.handleFilterCommand(cmd)
+			}
+		case ViewModeManifest:
+			if cmd, err := m.manifestRegistry.DispatchString(key); err == nil {
+				return m.handleManifestCommand(cmd)
+			}
+		case ViewModeVisualize:
+			if cmd, err := m.visualizerRegistry.DispatchString(key); err == nil {
+				return m.handleVisualizerCommand(cmd)
+			}
+		case ViewModeUtilization:
+			if cmd, err := m.utilizationRegistry.DispatchString(key); err == nil {
+				return m.handleUtilizationCommand(cmd)
+			}
+		}
 		return m, nil
 
 	case EditorFinishedMsg:
@@ -194,24 +243,81 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// Global keys - highest priority
-		if key.Matches(msg, m.globalKeys.Quit) {
-			return m, tea.Quit
-		}
-		if key.Matches(msg, m.globalKeys.Help) {
-			// Toggle help modal
-			if m.modal.IsVisible() && m.modal.modalType == ModalTypeHelp {
-				m.modal.Hide()
-			} else {
-				// Combine all key binding groups for help display
-				modeHelp := m.GetCurrentModeHelp()
-				allGroups := append(modeHelp.FullHelp(), m.globalKeys.FullHelp()...)
-				m.modal.ShowHelp(allGroups)
+		// Handle palette input if visible - highest priority
+		if m.paletteVisible {
+			// Check for Esc to close palette
+			if msg.String() == "esc" {
+				m.paletteVisible = false
+				return m, nil
 			}
-			return m, nil
+			// Pass all other keys to palette
+			m.paletteModel, cmd = m.paletteModel.Update(msg)
+			return m, cmd
 		}
 
-		// Selector gets priority after global keys
+		// Handle modal input if visible
+		if m.modal != nil && m.modal.IsVisible() {
+			var cmd tea.Cmd
+			m.modal, cmd = m.modal.Update(msg)
+			return m, cmd
+		}
+
+		// Global keys - highest priority, always check global registry first
+		slog.Debug("Received key msg", "key", msg.String())
+		if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
+			slog.Debug("Dispatch succeeded", "cmd", cmd)
+			return m.handleGlobalCommand(cmd)
+		}
+
+		// Mode-specific dispatch for Normal mode
+		if m.viewMode == ViewModeNormal {
+			if cmd, err := m.normalRegistry.Dispatch(msg); err == nil {
+				return m.handleNormalCommand(cmd)
+			}
+		}
+
+		// Mode-specific dispatch for Filter mode
+		if m.viewMode == ViewModeFilter {
+			if cmd, err := m.filterRegistry.Dispatch(msg); err == nil {
+				return m.handleFilterCommand(cmd)
+			}
+		}
+
+		if m.viewMode == ViewModeManifest {
+			if cmd, err := m.manifestRegistry.Dispatch(msg); err == nil {
+				return m.handleManifestCommand(cmd)
+			}
+		}
+
+		if m.viewMode == ViewModeVisualize {
+			// Only intercept Back command at Model level
+			if cmd, err := m.visualizerRegistry.Dispatch(msg); err == nil && cmd == keys.VisualizerCmdBack {
+				m.ExitVisualizeMode()
+				return m, nil
+			}
+			// Pass all keys to visualizer for handling
+			if m.visualizer != nil {
+				updated, cmd := m.visualizer.Update(msg)
+				m.visualizer = &updated
+				return m, cmd
+			}
+		}
+
+		if m.viewMode == ViewModeUtilization {
+			// Only intercept Back command at Model level
+			if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack {
+				m.ExitUtilizationMode()
+				return m, nil
+			}
+			// Pass all keys to utilization dashboard for handling
+			if m.utilizationDashboard != nil {
+				updated, cmd := m.utilizationDashboard.Update(msg)
+				m.utilizationDashboard = &updated
+				return m, cmd
+			}
+		}
+
+		// Selector gets priority after registry dispatch
 		if m.selector != nil && m.selector.IsVisible() {
 			m.selector, cmd = m.selector.Update(msg)
 			return m, cmd
@@ -222,7 +328,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.modal, cmd = m.modal.Update(msg)
 			return m, cmd
 		}
-		return m.handleKeyPress(msg)
+
+		return m, nil
 
 	case tea.MouseMsg:
 		// Modal gets priority for mouse events too
@@ -256,210 +363,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.viewMode == ViewModeNormal {
 		m.table, cmd = m.table.Update(msg)
 		m.selectedIndex = m.table.Cursor()
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-// handleKeyPress handles keyboard input
-func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Global keys (work in all modes)
-	switch msg.String() {
-	case "ctrl+c", "q": // TODO: USe the key scheme/binding names
-		// Allow quitting from splash mode or normal mode
-		if m.viewMode == ViewModeNormal || m.viewMode == ViewModeSplash {
-			return m, tea.Quit
-		}
-	}
-
-	// Mode-specific keys
-	switch m.viewMode {
-	case ViewModeFilter:
-		return m.handleFilterModeKeys(msg)
-	case ViewModeManifest:
-		return m.handleManifestModeKeys(msg)
-	case ViewModeVisualize:
-		return m.handleVisualizeModeKeys(msg)
-	case ViewModeUtilization:
-		return m.handleUtilizationModeKeys(msg)
-	case ViewModeNormal:
-		return m.handleNormalModeKeys(msg)
-	case ViewModeSplash:
-		// Allow context switching if we're in error state
-		// // TODO: Use key bindings instead of straight up
-		if m.splash.IsError() && msg.String() == "c" {
-			contexts := m.getAvailableContexts()
-			current := m.resourceService.GetCurrentContext()
-			m.selector = NewContextSelector(contexts, current)
-			return m, m.selector.Init()
-		}
-		// No other keys needed in splash mode
-		return m, nil
-	}
-
-	return m, nil
-}
-
-// handleNormalModeKeys handles keys in normal mode
-func (m Model) handleNormalModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	// Navigation
-	case key.Matches(msg, m.normalKeys.Up):
-		m.MoveUp()
-	case key.Matches(msg, m.normalKeys.Down):
-		m.MoveDown()
-	case key.Matches(msg, m.normalKeys.PageUp):
-		m.PageUp()
-	case key.Matches(msg, m.normalKeys.PageDown):
-		m.PageDown()
-	case key.Matches(msg, m.normalKeys.Home):
-		// Move to top
-		for m.table.Cursor() > 0 {
-			m.table.MoveUp(1)
-		}
-		m.selectedIndex = 0
-	case key.Matches(msg, m.normalKeys.End):
-		// Move to bottom
-		for m.table.Cursor() < len(m.filteredResources)-1 {
-			m.table.MoveDown(1)
-		}
-		m.selectedIndex = len(m.filteredResources) - 1
-
-	// Resource type switching
-	case key.Matches(msg, m.normalKeys.NextType):
-		m.NextResourceType()
-	case key.Matches(msg, m.normalKeys.PrevType):
-		m.PrevResourceType()
-
-	case key.Matches(msg, m.normalKeys.ToggleShowFavoriteTypes):
-		m.logger.Info("Detected toggle!", "set", !m.showingFavoriteTypes)
-		m.showingFavoriteTypes = !m.showingFavoriteTypes
-
-	// Filter by resource name
-	case key.Matches(msg, m.normalKeys.Filter):
-		m.EnterFilterMode()
-
-	// Namespace selector
-	case key.Matches(msg, m.normalKeys.NamespaceSelector):
-		return m, m.OpenNamespaceSelector()
-
-	// Resource type selector
-	case key.Matches(msg, m.normalKeys.ResourceTypeSelector):
-		return m, m.OpenResourceTypeSelector()
-
-	// Context selector
-	case key.Matches(msg, m.normalKeys.ContextSelector):
-		return m, m.OpenContextSelector()
-
-	// View manifest
-	case key.Matches(msg, m.normalKeys.Enter):
-		return m, m.EnterManifestMode()
-
-	// Edit resource with external editor
-	case key.Matches(msg, m.normalKeys.Edit):
-		return m, m.EditSelectedResource()
-
-	// Visualize resource relationships
-	case key.Matches(msg, m.normalKeys.Visualize):
-		resource := m.GetSelectedResource()
-		if resource != nil {
-			return m, func() tea.Msg {
-				return BuildGraphMsg{Resource: resource}
-			}
-		}
-
-	// Refresh resources
-	case key.Matches(msg, m.normalKeys.Refresh):
-		return m, m.startInformerWithSplash(m.CurrentResourceType())
-
-	// Open utilization dashboard
-	case key.Matches(msg, m.normalKeys.UtilizationDashboard):
-		return m, m.checkMetricsAPIAndOpen()
-
-	// Quit
-	case key.Matches(msg, m.normalKeys.Quit):
-		return m, tea.Quit
-	}
-
-	return m, nil
-}
-
-// handleFilterModeKeys handles keys in filter mode
-func (m Model) handleFilterModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch {
-	case key.Matches(msg, m.filterKeys.Accept):
-		// Apply filter
-		pattern := m.filterInput.Value()
-		m.UpdateFilter(pattern)
-		m.ExitFilterMode()
-		return m, nil
-
-	case key.Matches(msg, m.filterKeys.Cancel):
-		// Cancel filter
-		m.ExitFilterMode()
-		return m, nil
-
-	default:
-		// Update text input
-		m.filterInput, cmd = m.filterInput.Update(msg)
-	}
-
-	return m, cmd
-}
-
-// handleManifestModeKeys handles keys in manifest viewing mode
-func (m Model) handleManifestModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	var cmd tea.Cmd
-
-	switch {
-	case key.Matches(msg, m.manifestKeys.Back):
-		return m, m.ExitManifestMode()
-
-	case key.Matches(msg, m.manifestKeys.Edit):
-		return m, m.EditSelectedResource()
-
-	case key.Matches(msg, m.manifestKeys.Copy):
-		return m.CopyManifestToClipboard()
-	}
-
-	// Pass message to viewport for scrolling
-	m.manifestViewport, cmd = m.manifestViewport.Update(msg)
-	return m, cmd
-}
-
-// handleVisualizeModeKeys handles keys in visualization mode
-func (m Model) handleVisualizeModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch {
-	case key.Matches(msg, m.visualizerKeys.Back):
-		m.ExitVisualizeMode()
-		return m, nil
-	}
-
-	// Pass all other keys to the visualizer component
-	if m.visualizer != nil {
-		updatedVisualizer, cmd := m.visualizer.Update(msg)
-		m.visualizer = &updatedVisualizer
-		return m, cmd
-	}
-
-	return m, nil
-}
-
-// handleUtilizationModeKeys handles keys in utilization dashboard mode
-func (m Model) handleUtilizationModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Check for back/quit keys
-	if msg.String() == "esc" || msg.String() == "q" {
-		m.ExitUtilizationMode()
-		return m, nil
-	}
-
-	// Pass all other keys to the utilization dashboard component
-	if m.utilizationDashboard != nil {
-		updatedDashboard, cmd := m.utilizationDashboard.Update(msg)
-		m.utilizationDashboard = &updatedDashboard
 		return m, cmd
 	}
 

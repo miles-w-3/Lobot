@@ -9,13 +9,13 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 )
 
 // GraphVisualizerModel represents the graph visualization component
@@ -34,12 +34,11 @@ type GraphVisualizerModel struct {
 	selectedIndex   int
 	flattenedNodes  []*graph.Node
 	rootResource    k8s.TrackedObject
-	keys            GraphVisualizerKeyMap
-	help            help.Model
+	registry        *command.Registry[keys.GraphCmd]
 }
 
 // NewGraphVisualizerModel creates a new graph visualizer
-func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int) *GraphVisualizerModel {
+func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height int, registry *command.Registry[keys.GraphCmd]) *GraphVisualizerModel {
 	initStart := time.Now()
 
 	detailsWidth := 35
@@ -83,8 +82,7 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 		selectedIndex:   0,
 		flattenedNodes:  flattenedNodes,
 		rootResource:    resourceGraph.Root.Resource,
-		keys:            DefaultGraphVisualizerKeyMap(),
-		help:            help.New(),
+		registry:        registry,
 	}
 
 	contentStart := time.Now()
@@ -339,60 +337,67 @@ func (m *GraphVisualizerModel) updateDetailsPanel(node *graph.Node) {
 	m.detailsViewport.SetContent(details.String())
 }
 
-// Update handles updates for the graph visualizer
 func (m GraphVisualizerModel) Update(msg tea.Msg) (GraphVisualizerModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		switch {
-		// Arrow keys for node selection
-		case key.Matches(msg, m.keys.Up):
-			m.navigateHierarchicalUp()
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
-		case key.Matches(msg, m.keys.Down):
-			m.navigateHierarchicalDown()
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
-		case key.Matches(msg, m.keys.Left):
-			m.navigateLeft()
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
-		case key.Matches(msg, m.keys.Right):
-			m.navigateRight()
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
+		if dispatchedCmd, err := m.registry.Dispatch(msg); err == nil {
+			switch dispatchedCmd {
+			// Navigation
+			case keys.GraphCmdSelectUp:
+				m.navigateHierarchicalUp()
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
+			case keys.GraphCmdSelectDown:
+				m.navigateHierarchicalDown()
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
+			case keys.GraphCmdSelectLeft:
+				m.navigateLeft()
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
+			case keys.GraphCmdSelectRight:
+				m.navigateRight()
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
 
-		// i/j/k/l for canvas panning
-		case key.Matches(msg, m.keys.PanUp):
-			m.viewport2d.ScrollUp(3)
-			return m, nil
-		case key.Matches(msg, m.keys.PanDown):
-			m.viewport2d.ScrollDown(3)
-			return m, nil
-		case key.Matches(msg, m.keys.PanLeft):
-			m.viewport2d.ScrollLeft(5)
-			return m, nil
-		case key.Matches(msg, m.keys.PanRight):
-			m.viewport2d.ScrollRight(5)
-			return m, nil
+			// Pan
+			case keys.GraphCmdPanUp:
+				m.viewport2d.ScrollUp(3)
+				return m, nil
+			case keys.GraphCmdPanDown:
+				m.viewport2d.ScrollDown(3)
+				return m, nil
+			case keys.GraphCmdPanLeft:
+				m.viewport2d.ScrollLeft(5)
+				return m, nil
+			case keys.GraphCmdPanRight:
+				m.viewport2d.ScrollRight(5)
+				return m, nil
 
-		// Jump to first/last node
-		case key.Matches(msg, m.keys.Home):
-			m.selectedIndex = 0
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
-		case key.Matches(msg, m.keys.End):
-			m.selectedIndex = len(m.flattenedNodes) - 1
-			m.ensureSelectedVisible()
-			m.updateViewportContent()
-			return m, nil
+			// Jump
+			case keys.GraphCmdHome:
+				m.selectedIndex = 0
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
+			case keys.GraphCmdEnd:
+				m.selectedIndex = len(m.flattenedNodes) - 1
+				m.ensureSelectedVisible()
+				m.updateViewportContent()
+				return m, nil
+
+			// Exit/Back handled by parent visualizer (VisualizerModel) or default back command
+			case keys.GraphCmdBack:
+				// Parent handles this if needed, or propagate if you want specific behavior
+				// For now, VisualizerModel handles it
+				return m, nil
+			}
 		}
 	}
 
@@ -511,13 +516,13 @@ func (m *GraphVisualizerModel) renderGraphView() string {
 		Width(graphWidth).
 		Height(m.height - 4)
 
-	helpView := m.help.View(m.keys)
+	// helpView := m.help.View(m.keys)
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
 		title,
 		graphBox.Render(m.viewport2d.View()),
-		helpView,
+		// helpView,
 	)
 }
 
