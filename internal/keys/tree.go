@@ -21,6 +21,7 @@ const (
 	TreeCmdFocusRight
 	TreeCmdToggleDetails
 	TreeCmdBack
+	TreeCmdSwitchToGraph
 )
 
 func NewTreeRegistry() *command.Registry[TreeCmd] {
@@ -45,6 +46,9 @@ func NewTreeRegistry() *command.Registry[TreeCmd] {
 
 	view := r.NewCommandGroup("View")
 	view.Add("d", TreeCmdToggleDetails).WithDescription("toggle details")
+
+	switchMode := r.NewCommandGroup("Mode")
+	switchMode.Add("V", TreeCmdSwitchToGraph).WithDescription("switch to graph view")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit tree")
 	exit.Add("esc", TreeCmdBack).WithAlternates("q")

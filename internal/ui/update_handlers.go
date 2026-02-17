@@ -39,7 +39,13 @@ func (m Model) handleGlobalCommand(cmd keys.GlobalCmd) (Model, tea.Cmd) {
 			case ViewModeManifest:
 				modeHelp = m.manifestRegistry.FullView()
 			case ViewModeVisualize:
-				modeHelp = m.visualizerRegistry.FullView()
+				if m.visualizer != nil {
+					if m.visualizer.mode == VisualizationModeTree {
+						modeHelp = m.treeRegistry.FullView()
+					} else {
+						modeHelp = m.graphRegistry.FullView()
+					}
+				}
 			case ViewModeUtilization:
 				modeHelp = m.utilizationRegistry.FullView()
 			}
@@ -172,6 +178,54 @@ func (m Model) handleUtilizationCommand(cmd keys.UtilizationCmd) (Model, tea.Cmd
 	case keys.UtilizationCmdBack:
 		m.ExitUtilizationMode()
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) handleTreeCommand(cmd keys.TreeCmd) (Model, tea.Cmd) {
+	switch cmd {
+	case keys.TreeCmdBack:
+		m.ExitVisualizeMode()
+		return m, nil
+	case keys.TreeCmdSwitchToGraph:
+		if m.visualizer != nil && m.visualizer.mode == VisualizationModeTree {
+			// Initialize graph visualizer if needed
+			if m.visualizer.graphVisualizer == nil {
+				m.visualizer.graphVisualizer = NewGraphVisualizerModel(m.visualizer.graph, m.visualizer.width, m.visualizer.height, m.visualizer.graphRegistry)
+			}
+			m.visualizer.mode = VisualizationModeGraph
+		}
+		return m, nil
+	}
+	// Pass other commands to tree visualizer
+	if m.visualizer != nil {
+		updatedTree, treeCmd := m.visualizer.treeVisualizer.HandleCommand(cmd)
+		if updatedTree != nil {
+			m.visualizer.treeVisualizer = *updatedTree
+		}
+		return m, treeCmd
+	}
+	return m, nil
+}
+
+func (m Model) handleGraphCommand(cmd keys.GraphCmd) (Model, tea.Cmd) {
+	switch cmd {
+	case keys.GraphCmdBack:
+		m.ExitVisualizeMode()
+		return m, nil
+	case keys.GraphCmdSwitchToTree:
+		if m.visualizer != nil {
+			m.visualizer.mode = VisualizationModeTree
+		}
+		return m, nil
+	}
+	// Pass other commands to graph visualizer
+	if m.visualizer != nil && m.visualizer.graphVisualizer != nil {
+		updatedGraph, graphCmd := m.visualizer.graphVisualizer.HandleCommand(cmd)
+		if updatedGraph != nil {
+			m.visualizer.graphVisualizer = updatedGraph
+		}
+		return m, graphCmd
 	}
 	return m, nil
 }

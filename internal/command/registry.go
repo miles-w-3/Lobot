@@ -239,22 +239,24 @@ func (r *Registry[T]) PaletteEntries() []PaletteEntry {
 	seen := make(map[string]bool)
 
 	for _, group := range r.groups {
+		// Skip unified command groups (groups with a unified description)
+		// These represent multiple key bindings for a single action (e.g., "navigate")
+		// and should not appear as individual palette entries
+		if group.Description != "" {
+			continue
+		}
+
 		for _, binding := range group.Commands {
 			if seen[binding.Key] {
 				continue
 			}
 			seen[binding.Key] = true
 
-			desc := binding.Description
-			if group.Description != "" {
-				desc = group.Description
-			}
-
 			entries = append(entries, PaletteEntry{
 				Key:         binding.Key,
 				AltKeys:     binding.AltKeys,
 				Display:     binding.Display,
-				Description: desc,
+				Description: binding.Description,
 				Group:       group.Title,
 				Searchable:  binding.Searchable,
 			})

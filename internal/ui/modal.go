@@ -31,6 +31,7 @@ type Modal struct {
 	visible        bool
 	detailLines    []string
 	globalRegistry *command.Registry[keys.GlobalCmd]
+	modalRegistry  *command.Registry[keys.ModalCmd]
 	viewport       viewport.Model
 }
 
@@ -41,6 +42,7 @@ func NewModal(registry *command.Registry[keys.GlobalCmd]) *Modal {
 		width:          60,
 		height:         10,
 		globalRegistry: registry,
+		modalRegistry:  keys.NewModalRegistry(),
 		viewport:       viewport.New(0, 0),
 	}
 }
@@ -122,16 +124,30 @@ func (m *Modal) Update(msg tea.Msg) (*Modal, tea.Cmd) {
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		// TODO: Load this into a registry, or as a global
-		if msg.String() == "esc" {
-			m.Hide()
-			return m, nil
-		}
-
-		if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
-			switch cmd {
+		// Check global registry first for quit/help
+		if gcmd, err := m.globalRegistry.Dispatch(msg); err == nil {
+			switch gcmd {
 			case keys.GlobalCmdQuit, keys.GlobalCmdHelp:
 				m.Hide()
+				return m, nil
+			}
+		}
+
+		// Check modal registry for back/scroll commands
+		if mcmd, err := m.modalRegistry.Dispatch(msg); err == nil {
+			switch mcmd {
+			case keys.ModalCmdBack:
+				m.Hide()
+				return m, nil
+			case keys.ModalCmdScrollUp:
+				if m.modalType == ModalTypeHelp {
+					m.viewport.LineUp(1)
+				}
+				return m, nil
+			case keys.ModalCmdScrollDown:
+				if m.modalType == ModalTypeHelp {
+					m.viewport.LineDown(1)
+				}
 				return m, nil
 			}
 		}

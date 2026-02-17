@@ -30,23 +30,21 @@ const (
 
 // VisualizerModel represents the visualization mode component
 type VisualizerModel struct {
-	mode               VisualizationMode
-	treeVisualizer     TreeVisualizerModel
-	graphVisualizer    *GraphVisualizerModel
-	graph              *graph.ResourceGraph
-	width              int
-	height             int
-	rootResource       k8s.TrackedObject
-	visualizerRegistry *command.Registry[keys.VisualizerCmd]
-	treeRegistry       *command.Registry[keys.TreeCmd]
-	graphRegistry      *command.Registry[keys.GraphCmd]
+	mode            VisualizationMode
+	treeVisualizer  TreeVisualizerModel
+	graphVisualizer *GraphVisualizerModel
+	graph           *graph.ResourceGraph
+	width           int
+	height          int
+	rootResource    k8s.TrackedObject
+	treeRegistry    *command.Registry[keys.TreeCmd]
+	graphRegistry   *command.Registry[keys.GraphCmd]
 }
 
 // NewVisualizerModel creates a new visualizer model
 func NewVisualizerModel(
 	resourceGraph *graph.ResourceGraph,
 	width, height int,
-	visualizerRegistry *command.Registry[keys.VisualizerCmd],
 	treeRegistry *command.Registry[keys.TreeCmd],
 	graphRegistry *command.Registry[keys.GraphCmd],
 ) VisualizerModel {
@@ -54,16 +52,15 @@ func NewVisualizerModel(
 	treeVisualizer := NewTreeVisualizerModel(resourceGraph, width, height, treeRegistry)
 
 	return VisualizerModel{
-		mode:               VisualizationModeTree,
-		treeVisualizer:     treeVisualizer,
-		graphVisualizer:    nil, // Lazy initialization
-		graph:              resourceGraph,
-		width:              width,
-		height:             height,
-		rootResource:       resourceGraph.Root.Resource,
-		visualizerRegistry: visualizerRegistry,
-		treeRegistry:       treeRegistry,
-		graphRegistry:      graphRegistry,
+		mode:            VisualizationModeTree,
+		treeVisualizer:  treeVisualizer,
+		graphVisualizer: nil, // Lazy initialization
+		graph:           resourceGraph,
+		width:           width,
+		height:          height,
+		rootResource:    resourceGraph.Root.Resource,
+		treeRegistry:    treeRegistry,
+		graphRegistry:   graphRegistry,
 	}
 }
 
@@ -72,25 +69,6 @@ func (m VisualizerModel) Update(msg tea.Msg) (VisualizerModel, tea.Cmd) {
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if dispatchedCmd, err := m.visualizerRegistry.Dispatch(msg); err == nil {
-			switch dispatchedCmd {
-			case keys.VisualizerCmdToggleMode:
-				if m.mode == VisualizationModeTree {
-					if m.graphVisualizer == nil {
-						m.graphVisualizer = NewGraphVisualizerModel(m.graph, m.width, m.height, m.graphRegistry)
-					}
-					m.mode = VisualizationModeGraph
-				} else {
-					m.mode = VisualizationModeTree
-				}
-				return m, nil
-			case keys.VisualizerCmdBack:
-				m.mode = VisualizationModeTree
-				return m, nil
-			}
-		}
-
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height

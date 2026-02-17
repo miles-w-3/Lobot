@@ -259,14 +259,8 @@ func (m Model) renderHelp() string {
 	// Always show global help first
 	helpView := m.globalRegistry.ShortView()
 
-	// Special handling for visualizer mode to combine registries
+	// Special handling for visualizer mode to show mode-specific commands
 	if m.viewMode == ViewModeVisualize && m.visualizer != nil {
-		// Show visualizer common commands (Toggle Mode, Back, etc.)
-		visHelp := m.visualizerRegistry.ShortView()
-		if visHelp != "" {
-			helpView += separator + visHelp
-		}
-
 		// Show specific mode commands
 		var specificHelp string
 		if m.visualizer.mode == VisualizationModeGraph {

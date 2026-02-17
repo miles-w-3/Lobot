@@ -28,17 +28,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
-	// Handle palette input if visible
+	// Handle palette input if visible - only intercept KeyMsg, let other messages fall through
 	if m.paletteVisible {
-		var cmd tea.Cmd
-		// Start Check for Esc
-		if keyMsg, ok := msg.(tea.KeyMsg); ok && keyMsg.String() == "esc" {
-			m.paletteVisible = false
-			return m, nil
+		if keyMsg, ok := msg.(tea.KeyMsg); ok {
+			// Check for global commands (ctrl+c, esc, etc.) before palette consumes them
+			if cmd, err := m.globalRegistry.Dispatch(keyMsg); err == nil {
+				m.paletteVisible = false
+				return m.handleGlobalCommand(cmd)
+			}
+			// Pass other keys to palette
+			var cmd tea.Cmd
+			m.paletteModel, cmd = m.paletteModel.Update(keyMsg)
+			return m, cmd
 		}
-		// End Check
-		m.paletteModel, cmd = m.paletteModel.Update(msg)
-		return m, cmd
+		// Non-KeyMsg (like PaletteSelectedMsg) falls through to main switch below
 	}
 
 	switch msg := msg.(type) {
@@ -107,6 +110,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SelectorFinishedMsg:
+		logger := slog.Default()
+		logger.Debug("SelectorFinishedMsg received",
+			"cancelled", msg.Cancelled,
+			"selectorType", msg.SelectorType,
+			"selectedValue", msg.SelectedValue,
+			"selectorIsNil", m.selector == nil)
+
 		if !msg.Cancelled {
 			switch msg.SelectorType {
 			case SelectorTypeNamespace:
@@ -124,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Build the graph for the resource
 		if msg.Resource != nil {
 			resourceGraph := m.graphBuilder.BuildGraph(msg.Resource)
-			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height, m.visualizerRegistry, m.treeRegistry, m.graphRegistry)
+			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height, m.treeRegistry, m.graphRegistry)
 			m.visualizer = &visualizer
 			m.viewMode = ViewModeVisualize
 		}
@@ -180,14 +190,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m.handleManifestCommand(cmd)
 			}
 		case ViewModeVisualize:
-			if cmd, err := m.visualizerRegistry.DispatchString(key); err == nil {
-				return m.handleVisualizerCommand(cmd)
+			if m.visualizer != nil {
+				if m.visualizer.mode == VisualizationModeTree {
+					if cmd, err := m.treeRegistry.DispatchString(key); err == nil {
+						return m.handleTreeCommand(cmd)
+					}
+				} else {
+					if cmd, err := m.graphRegistry.DispatchString(key); err == nil {
+						return m.handleGraphCommand(cmd)
+					}
+				}
 			}
 		case ViewModeUtilization:
 			if cmd, err := m.utilizationRegistry.DispatchString(key); err == nil {
 				return m.handleUtilizationCommand(cmd)
 			}
 		}
+		return m, nil
+
+	case PaletteBackMsg:
+		m.paletteVisible = false
 		return m, nil
 
 	case EditorFinishedMsg:
@@ -245,20 +267,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		// Handle palette input if visible - highest priority
 		if m.paletteVisible {
-			// Check for Esc to close palette
-			if msg.String() == "esc" {
+			// Check for global commands (ctrl+c, esc, etc.) before palette consumes them
+			if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
 				m.paletteVisible = false
-				return m, nil
+				return m.handleGlobalCommand(cmd)
 			}
 			// Pass all other keys to palette
 			m.paletteModel, cmd = m.paletteModel.Update(msg)
-			return m, cmd
-		}
-
-		// Handle modal input if visible
-		if m.modal != nil && m.modal.IsVisible() {
-			var cmd tea.Cmd
-			m.modal, cmd = m.modal.Update(msg)
 			return m, cmd
 		}
 
@@ -269,41 +284,57 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGlobalCommand(cmd)
 		}
 
-		// Mode-specific dispatch for Normal mode
-		if m.viewMode == ViewModeNormal {
+		// Check for visible overlays BEFORE mode-specific registries
+		// Overlays should intercept input before underlying view processes it
+
+		// Selector gets priority when visible
+		if m.selector != nil && m.selector.IsVisible() {
+			m.selector, cmd = m.selector.Update(msg)
+			return m, cmd
+		}
+
+		// Modal gets priority when visible
+		if m.modal != nil && m.modal.IsVisible() {
+			var cmd tea.Cmd
+			m.modal, cmd = m.modal.Update(msg)
+			return m, cmd
+		}
+
+		// Mode-specific dispatch only if no overlays are visible
+		switch m.viewMode {
+		case ViewModeNormal:
 			if cmd, err := m.normalRegistry.Dispatch(msg); err == nil {
 				return m.handleNormalCommand(cmd)
 			}
-		}
-
-		// Mode-specific dispatch for Filter mode
-		if m.viewMode == ViewModeFilter {
+		case ViewModeFilter:
 			if cmd, err := m.filterRegistry.Dispatch(msg); err == nil {
 				return m.handleFilterCommand(cmd)
 			}
-		}
-
-		if m.viewMode == ViewModeManifest {
+			// If key doesn't match a filter command, pass it to filter input for typing
+			m.filterInput, cmd = m.filterInput.Update(msg)
+			return m, cmd
+		case ViewModeManifest:
 			if cmd, err := m.manifestRegistry.Dispatch(msg); err == nil {
 				return m.handleManifestCommand(cmd)
 			}
-		}
-
-		if m.viewMode == ViewModeVisualize {
-			// Only intercept Back command at Model level
-			if cmd, err := m.visualizerRegistry.Dispatch(msg); err == nil && cmd == keys.VisualizerCmdBack {
-				m.ExitVisualizeMode()
-				return m, nil
-			}
-			// Pass all keys to visualizer for handling
+		case ViewModeVisualize:
+			// Handle visualizer commands based on current mode (tree or graph)
 			if m.visualizer != nil {
+				if m.visualizer.mode == VisualizationModeTree {
+					if cmd, err := m.treeRegistry.Dispatch(msg); err == nil {
+						return m.handleTreeCommand(cmd)
+					}
+				} else {
+					if cmd, err := m.graphRegistry.Dispatch(msg); err == nil {
+						return m.handleGraphCommand(cmd)
+					}
+				}
+				// Pass unhandled keys to visualizer for direct handling
 				updated, cmd := m.visualizer.Update(msg)
 				m.visualizer = &updated
 				return m, cmd
 			}
-		}
-
-		if m.viewMode == ViewModeUtilization {
+		case ViewModeUtilization:
 			// Only intercept Back command at Model level
 			if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack {
 				m.ExitUtilizationMode()
@@ -315,18 +346,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.utilizationDashboard = &updated
 				return m, cmd
 			}
-		}
-
-		// Selector gets priority after registry dispatch
-		if m.selector != nil && m.selector.IsVisible() {
-			m.selector, cmd = m.selector.Update(msg)
-			return m, cmd
-		}
-
-		// Modal gets priority for key handling
-		if m.modal.IsVisible() {
-			m.modal, cmd = m.modal.Update(msg)
-			return m, cmd
 		}
 
 		return m, nil

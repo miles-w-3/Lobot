@@ -99,7 +99,6 @@ type Model struct {
 	normalRegistry      *command.Registry[keys.NormalCmd]
 	filterRegistry      *command.Registry[keys.FilterCmd]
 	manifestRegistry    *command.Registry[keys.ManifestCmd]
-	visualizerRegistry  *command.Registry[keys.VisualizerCmd]
 	treeRegistry        *command.Registry[keys.TreeCmd]
 	graphRegistry       *command.Registry[keys.GraphCmd]
 	utilizationRegistry *command.Registry[keys.UtilizationCmd]
@@ -115,8 +114,6 @@ func (m Model) CurrentRegistry() command.RegistryInterface {
 		return m.filterRegistry
 	case ViewModeManifest:
 		return m.manifestRegistry
-	case ViewModeVisualize:
-		return m.visualizerRegistry
 	case ViewModeUtilization:
 		return m.utilizationRegistry
 	default:
@@ -185,7 +182,6 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 	normalRegistry := keys.NewNormalRegistry()
 	filterRegistry := keys.NewFilterRegistry()
 	manifestRegistry := keys.NewManifestRegistry()
-	visualizerRegistry := keys.NewVisualizerRegistry()
 	treeRegistry := keys.NewTreeRegistry()
 	graphRegistry := keys.NewGraphRegistry()
 	utilizationRegistry := keys.NewUtilizationRegistry()
@@ -211,7 +207,6 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		normalRegistry:        normalRegistry,
 		filterRegistry:        filterRegistry,
 		manifestRegistry:      manifestRegistry,
-		visualizerRegistry:    visualizerRegistry,
 		treeRegistry:          treeRegistry,
 		graphRegistry:         graphRegistry,
 		utilizationRegistry:   utilizationRegistry,

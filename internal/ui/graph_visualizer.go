@@ -35,6 +35,7 @@ type GraphVisualizerModel struct {
 	flattenedNodes  []*graph.Node
 	rootResource    k8s.TrackedObject
 	registry        *command.Registry[keys.GraphCmd]
+	zoomLevel       float64 // Zoom scale (1.0 = 100%)
 }
 
 // NewGraphVisualizerModel creates a new graph visualizer
@@ -83,6 +84,7 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 		flattenedNodes:  flattenedNodes,
 		rootResource:    resourceGraph.Root.Resource,
 		registry:        registry,
+		zoomLevel:       1.0, // Default 100% zoom
 	}
 
 	contentStart := time.Now()
@@ -541,4 +543,55 @@ func (m *GraphVisualizerModel) renderDetailsPanel() string {
 		Height(m.height - 4)
 
 	return detailsBox.Render(m.detailsViewport.View())
+}
+
+// HandleCommand handles a graph command directly
+func (m *GraphVisualizerModel) HandleCommand(cmd keys.GraphCmd) (*GraphVisualizerModel, tea.Cmd) {
+	switch cmd {
+	case keys.GraphCmdSelectUp:
+		m.navigateHierarchicalUp()
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdSelectDown:
+		m.navigateHierarchicalDown()
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdSelectLeft:
+		m.navigateLeft()
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdSelectRight:
+		m.navigateRight()
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdPanUp:
+		m.viewport2d.ScrollUp(3)
+	case keys.GraphCmdPanDown:
+		m.viewport2d.ScrollDown(3)
+	case keys.GraphCmdPanLeft:
+		m.viewport2d.ScrollLeft(5)
+	case keys.GraphCmdPanRight:
+		m.viewport2d.ScrollRight(5)
+	case keys.GraphCmdHome:
+		m.selectedIndex = 0
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdEnd:
+		m.selectedIndex = len(m.flattenedNodes) - 1
+		m.ensureSelectedVisible()
+		m.updateViewportContent()
+	case keys.GraphCmdZoomIn:
+		// Increase zoom level (max 300%)
+		if m.zoomLevel < 3.0 {
+			m.zoomLevel += 0.25
+			m.updateViewportContent()
+		}
+	case keys.GraphCmdZoomOut:
+		// Decrease zoom level (min 50%)
+		if m.zoomLevel > 0.5 {
+			m.zoomLevel -= 0.25
+			m.updateViewportContent()
+		}
+	}
+	return m, nil
 }

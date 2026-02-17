@@ -553,3 +553,47 @@ func (m *TreeVisualizerModel) renderDetailsPanel() string {
 
 	return detailsBox.Render(m.detailsViewport.View())
 }
+
+// HandleCommand handles a tree command directly
+func (m *TreeVisualizerModel) HandleCommand(cmd keys.TreeCmd) (*TreeVisualizerModel, tea.Cmd) {
+	switch cmd {
+	case keys.TreeCmdMoveUp:
+		m.navigateUp()
+		m.updateViewportContent()
+	case keys.TreeCmdMoveDown:
+		m.navigateDown()
+		m.updateViewportContent()
+	case keys.TreeCmdHome:
+		m.navigateTop()
+		m.updateViewportContent()
+	case keys.TreeCmdEnd:
+		m.navigateBottom()
+		m.updateViewportContent()
+	case keys.TreeCmdPageUp:
+		m.pageUp()
+		m.updateViewportContent()
+	case keys.TreeCmdPageDown:
+		m.pageDown()
+		m.updateViewportContent()
+	case keys.TreeCmdToggle:
+		m.toggleCurrentNode()
+	case keys.TreeCmdExpandAll:
+		m.expandAll()
+	case keys.TreeCmdCollapseAll:
+		m.collapseAll()
+	case keys.TreeCmdFocusLeft:
+		if m.showDetails {
+			m.focusedPanel = FocusTree
+		}
+	case keys.TreeCmdFocusRight:
+		if m.showDetails {
+			m.focusedPanel = FocusDetails
+		}
+	case keys.TreeCmdToggleDetails:
+		m.showDetails = !m.showDetails
+		if !m.showDetails {
+			m.focusedPanel = FocusTree
+		}
+	}
+	return m, nil
+}

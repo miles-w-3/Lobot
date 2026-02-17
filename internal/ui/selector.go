@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"log/slog"
 	"sort"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -80,14 +81,35 @@ func (s *SelectorModel) Init() tea.Cmd {
 
 // Update handles messages
 func (s *SelectorModel) Update(msg tea.Msg) (*SelectorModel, tea.Cmd) {
+	logger := slog.Default()
+
 	if !s.visible {
 		return s, nil
 	}
 
+	// Track if this is a KeyMsg and what key was pressed
+	var keyStr string
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
+		keyStr = keyMsg.String()
+		logger.Debug("Selector received key", "key", keyStr, "type", s.selectorType)
+
+		// Check for esc to cancel
+		if keyStr == "esc" {
+			logger.Debug("Selector: esc pressed, cancelling")
+			s.visible = false
+			return s, func() tea.Msg {
+				return SelectorFinishedMsg{
+					SelectorType: s.selectorType,
+					Cancelled:    true,
+				}
+			}
+		}
+
+		// Check global registry for quit/help
 		if cmd, err := s.globalRegistry.Dispatch(keyMsg); err == nil {
 			switch cmd {
 			case keys.GlobalCmdQuit, keys.GlobalCmdHelp:
+				logger.Debug("Selector: global command received, cancelling", "cmd", cmd)
 				s.visible = false
 				return s, func() tea.Msg {
 					return SelectorFinishedMsg{
@@ -100,7 +122,24 @@ func (s *SelectorModel) Update(msg tea.Msg) (*SelectorModel, tea.Cmd) {
 	}
 
 	// Pass all other messages to underlying selection model
+	logger.Debug("Selector: passing to promptkit", "msgType", "tea.KeyMsg")
 	_, cmd := s.selection.Update(msg)
+
+	// Only check for completion when Enter is pressed
+	if keyStr == "enter" {
+		if val, err := s.selection.Value(); err == nil && val != "" && s.visible {
+			logger.Debug("Selector: enter pressed with value, completing", "value", val)
+			s.visible = false
+			return s, func() tea.Msg {
+				return SelectorFinishedMsg{
+					SelectedValue: val,
+					SelectorType:  s.selectorType,
+					Cancelled:     false,
+				}
+			}
+		}
+	}
+
 	return s, cmd
 }
 
@@ -164,16 +203,20 @@ func (m *Model) getAvailableContexts() []string {
 
 // OpenNamespaceSelector opens the namespace selector
 func (m *Model) OpenNamespaceSelector() tea.Cmd {
+	logger := slog.Default()
 	namespaces := m.getAllNamespaces()
 	current := m.namespaceFilter.GetPattern()
+	logger.Debug("Opening namespace selector", "namespaceCount", len(namespaces), "current", current)
 	m.selector = NewNamespaceSelector(namespaces, current, m.globalRegistry)
 	return m.selector.Init()
 }
 
 // OpenContextSelector opens the context selector
 func (m *Model) OpenContextSelector() tea.Cmd {
+	logger := slog.Default()
 	contexts := m.getAvailableContexts()
 	current := m.resourceService.GetCurrentContext()
+	logger.Debug("Opening context selector", "contextCount", len(contexts), "current", current)
 	m.selector = NewContextSelector(contexts, current, m.globalRegistry)
 	return m.selector.Init()
 }
@@ -209,7 +252,9 @@ func NewResourceTypeSelector(resourceTypes []string, registry *command.Registry[
 
 // OpenResourceTypeSelector opens the resource type selector
 func (m *Model) OpenResourceTypeSelector() tea.Cmd {
+	logger := slog.Default()
 	resourceTypes := m.getAllResourceTypes()
+	logger.Debug("Opening resource type selector", "typeCount", len(resourceTypes))
 	m.selector = NewResourceTypeSelector(resourceTypes, m.globalRegistry)
 	return m.selector.Init()
 }

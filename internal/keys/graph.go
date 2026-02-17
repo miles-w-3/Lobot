@@ -19,6 +19,9 @@ const (
 	GraphCmdHome
 	GraphCmdEnd
 	GraphCmdBack
+	GraphCmdZoomIn
+	GraphCmdZoomOut
+	GraphCmdSwitchToTree
 )
 
 func NewGraphRegistry() *command.Registry[GraphCmd] {
@@ -39,6 +42,13 @@ func NewGraphRegistry() *command.Registry[GraphCmd] {
 	jump := r.NewCommandGroup("Jump")
 	jump.Add("home", GraphCmdHome).WithAlternates("g").WithDescription("first node")
 	jump.Add("end", GraphCmdEnd).WithAlternates("G").WithDescription("last node")
+
+	zoom := r.NewCommandGroup("Zoom")
+	zoom.Add("+", GraphCmdZoomIn).WithDescription("zoom in")
+	zoom.Add("-", GraphCmdZoomOut).WithDescription("zoom out")
+
+	switchMode := r.NewCommandGroup("Mode")
+	switchMode.Add("V", GraphCmdSwitchToTree).WithDescription("switch to tree view")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit graph")
 	exit.Add("esc", GraphCmdBack).WithAlternates("q")
