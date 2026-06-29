@@ -218,13 +218,8 @@ func (m Model) View() string {
 			Bold(true).
 			MarginTop(2)
 
-		instructionStyle := lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#FFA500")).
-			MarginTop(1)
-
 		out += "\n\n" + errorStyle.Render("⚠ Connection Failed")
-		//out += "\n\n" + instructionStyle.Render(m.errorMessage)
-		out += "\n\n" + instructionStyle.Render("Press 'c' to switch context | Press 'q' to quit")
+		//out += "\n\n" + lipgloss.NewStyle().Foreground(lipgloss.Color("#FFA500")).MarginTop(1).Render(m.errorMessage)
 	}
 
 	// Center the content horizontally and vertically in the terminal

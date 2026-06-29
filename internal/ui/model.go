@@ -96,6 +96,7 @@ type Model struct {
 
 	// Command registries
 	globalRegistry      *command.Registry[keys.GlobalCmd]
+	splashRegistry      *command.Registry[keys.SplashCmd]
 	normalRegistry      *command.Registry[keys.NormalCmd]
 	filterRegistry      *command.Registry[keys.FilterCmd]
 	manifestRegistry    *command.Registry[keys.ManifestCmd]
@@ -110,6 +111,8 @@ type Model struct {
 // CurrentRegistry returns the command registry for the current view mode
 func (m Model) CurrentRegistry() command.RegistryInterface {
 	switch m.viewMode {
+	case ViewModeSplash:
+		return m.splashRegistry
 	case ViewModeFilter:
 		return m.filterRegistry
 	case ViewModeManifest:
@@ -179,6 +182,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 
 	// Create registries first so they can be shared
 	globalRegistry := keys.NewGlobalRegistry()
+	splashRegistry := keys.NewSplashRegistry()
 	normalRegistry := keys.NewNormalRegistry()
 	filterRegistry := keys.NewFilterRegistry()
 	manifestRegistry := keys.NewManifestRegistry()
@@ -204,6 +208,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		ready:                 false,
 		showingFavoriteTypes:  false,
 		globalRegistry:        globalRegistry,
+		splashRegistry:        splashRegistry,
 		normalRegistry:        normalRegistry,
 		filterRegistry:        filterRegistry,
 		manifestRegistry:      manifestRegistry,

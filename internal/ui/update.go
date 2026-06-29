@@ -177,6 +177,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Mode specific
 		switch m.viewMode {
+		case ViewModeSplash:
+			if cmd, err := m.splashRegistry.DispatchString(key); err == nil {
+				return m.handleSplashCommand(cmd)
+			}
 		case ViewModeNormal:
 			if cmd, err := m.normalRegistry.DispatchString(key); err == nil {
 				return m.handleNormalCommand(cmd)
@@ -302,6 +306,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Mode-specific dispatch only if no overlays are visible
 		switch m.viewMode {
+		case ViewModeSplash:
+			if m.splash.IsError() {
+				if cmd, err := m.splashRegistry.Dispatch(msg); err == nil {
+					return m.handleSplashCommand(cmd)
+				}
+			}
 		case ViewModeNormal:
 			if cmd, err := m.normalRegistry.Dispatch(msg); err == nil {
 				return m.handleNormalCommand(cmd)
