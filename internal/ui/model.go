@@ -19,9 +19,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/filters"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
+	"github.com/miles-w-3/lobot/internal/keys"
 	"github.com/miles-w-3/lobot/internal/splash"
 	"sigs.k8s.io/yaml"
 )
@@ -37,6 +39,7 @@ const (
 	ViewModeResourceTypeSelection
 	ViewModeVisualize
 	ViewModeUtilization
+	ViewModePalette
 )
 
 // Model represents the UI state
@@ -56,11 +59,6 @@ type Model struct {
 	scrollOffset  int
 	width         int
 	height        int
-
-	// Filtering
-	namespaceFilter *filters.NamespaceFilter    // Namespace filter (set via ctrl+n selector)
-	nameFilter      *filters.ResourceNameFilter // Resource name filter (set via / search)
-	filterInput     textinput.Model
 
 	// Splash screen
 	splash splash.Model
@@ -85,19 +83,42 @@ type Model struct {
 	visualizer *VisualizerModel
 
 	utilizationDashboard *UtilizationDashboardModel
+	paletteModel         PaletteModel
+	paletteVisible       bool
+
+	// Filtering
+	namespaceFilter *filters.NamespaceFilter    // Namespace filter (set via ctrl+n selector)
+	nameFilter      *filters.ResourceNameFilter // Resource name filter (set via / search)
+	filterInput     textinput.Model
 
 	showingFavoriteTypes  bool
 	favoriteTypesViewport viewport.Model
 
-	// Key bindings
-	globalKeys     GlobalKeyMap
-	normalKeys     NormalModeKeyMap
-	manifestKeys   ManifestModeKeyMap
-	visualizerKeys VisualizerModeKeyMap
-	filterKeys     FilterModeKeyMap
+	// Command registries
+	globalRegistry      *command.Registry[keys.GlobalCmd]
+	normalRegistry      *command.Registry[keys.NormalCmd]
+	filterRegistry      *command.Registry[keys.FilterCmd]
+	manifestRegistry    *command.Registry[keys.ManifestCmd]
+	treeRegistry        *command.Registry[keys.TreeCmd]
+	graphRegistry       *command.Registry[keys.GraphCmd]
+	utilizationRegistry *command.Registry[keys.UtilizationCmd]
 
 	// Error tracking
 	errorTracker *ErrorTracker
+}
+
+// CurrentRegistry returns the command registry for the current view mode
+func (m Model) CurrentRegistry() command.RegistryInterface {
+	switch m.viewMode {
+	case ViewModeFilter:
+		return m.filterRegistry
+	case ViewModeManifest:
+		return m.manifestRegistry
+	case ViewModeUtilization:
+		return m.utilizationRegistry
+	default:
+		return m.normalRegistry
+	}
 }
 
 // ResourceUpdateMsg is sent when resources are updated
@@ -156,6 +177,15 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 
 	favoriteTypesViewport.SetContent("Test\nTest2\nTest3\n")
 
+	// Create registries first so they can be shared
+	globalRegistry := keys.NewGlobalRegistry()
+	normalRegistry := keys.NewNormalRegistry()
+	filterRegistry := keys.NewFilterRegistry()
+	manifestRegistry := keys.NewManifestRegistry()
+	treeRegistry := keys.NewTreeRegistry()
+	graphRegistry := keys.NewGraphRegistry()
+	utilizationRegistry := keys.NewUtilizationRegistry()
+
 	return Model{
 		logger:                logger,
 		resourceService:       resourceService,
@@ -173,13 +203,16 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		table:                 t,
 		ready:                 false,
 		showingFavoriteTypes:  false,
-		modal:                 NewModal(),
-		globalKeys:            DefaultGlobalKeyMap(),
-		normalKeys:            DefaultNormalModeKeyMap(),
-		manifestKeys:          DefaultManifestModeKeyMap(),
-		visualizerKeys:        DefaultVisualizerModeKeyMap(),
-		filterKeys:            DefaultFilterModeKeyMap(),
+		globalRegistry:        globalRegistry,
+		normalRegistry:        normalRegistry,
+		filterRegistry:        filterRegistry,
+		manifestRegistry:      manifestRegistry,
+		treeRegistry:          treeRegistry,
+		graphRegistry:         graphRegistry,
+		utilizationRegistry:   utilizationRegistry,
+		modal:                 NewModal(globalRegistry),
 		errorTracker:          errorTracker,
+		paletteModel:          NewPaletteModel(0, 0), // Width/height updated on WindowSizeMsg
 	}
 }
 
@@ -613,26 +646,6 @@ func max(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// GetCurrentModeHelp returns help bindings for the current mode
-func (m *Model) GetCurrentModeHelp() help.KeyMap {
-	switch m.viewMode {
-	case ViewModeNormal:
-		return m.normalKeys
-	case ViewModeManifest:
-		return m.manifestKeys
-	case ViewModeVisualize:
-		// Get the actual visualizer's keymap (tree or graph)
-		if m.visualizer != nil {
-			return m.visualizer.GetKeyMap()
-		}
-		return m.visualizerKeys
-	case ViewModeFilter:
-		return m.filterKeys
-	default:
-		return m.normalKeys
-	}
 }
 
 func formatManifest(obj interface{}) string {
