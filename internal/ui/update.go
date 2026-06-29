@@ -345,13 +345,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		case ViewModeUtilization:
-			// Only intercept Back command at Model level
-			if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack {
-				m.ExitUtilizationMode()
-				return m, nil
-			}
-			// Pass all keys to utilization dashboard for handling
 			if m.utilizationDashboard != nil {
+				if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack && !m.utilizationDashboard.showNodeDetails {
+					m.ExitUtilizationMode()
+					return m, nil
+				}
+
 				updated, cmd := m.utilizationDashboard.Update(msg)
 				m.utilizationDashboard = &updated
 				return m, cmd

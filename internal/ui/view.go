@@ -382,8 +382,17 @@ func (m Model) renderUtilizationView() string {
 		return "Loading metrics..."
 	}
 
-	content := m.utilizationDashboard.View()
 	help := m.renderHelp()
+	helpHeight := lipgloss.Height(help)
+	contentHeight := m.height - helpHeight
+	if contentHeight < 10 {
+		contentHeight = 10
+	}
+
+	dashboard := *m.utilizationDashboard
+	dashboard.width = m.width
+	dashboard.height = contentHeight
+	content := dashboard.View()
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,
