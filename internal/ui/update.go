@@ -98,7 +98,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errorTracker.LogError("system", msg.Error.Error())
 		}
 
-		if m.viewMode == ViewModeSplash {
+		if m.viewMode == ViewModeSplash || !m.ready {
+			m.viewMode = ViewModeSplash
+			m.ready = false
 			m.splash.MarkError(msg.Error)
 		} else {
 			m.modal.ShowError("Error", msg.Error.Error())
@@ -177,6 +179,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Mode specific
 		switch m.viewMode {
+		case ViewModeSplash:
+			if cmd, err := m.splashRegistry.DispatchString(key); err == nil {
+				return m.handleSplashCommand(cmd)
+			}
 		case ViewModeNormal:
 			if cmd, err := m.normalRegistry.DispatchString(key); err == nil {
 				return m.handleNormalCommand(cmd)
@@ -302,6 +308,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Mode-specific dispatch only if no overlays are visible
 		switch m.viewMode {
+		case ViewModeSplash:
+			if m.splash.IsError() {
+				if cmd, err := m.splashRegistry.Dispatch(msg); err == nil {
+					return m.handleSplashCommand(cmd)
+				}
+			}
 		case ViewModeNormal:
 			if cmd, err := m.normalRegistry.Dispatch(msg); err == nil {
 				return m.handleNormalCommand(cmd)
@@ -335,13 +347,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 			}
 		case ViewModeUtilization:
-			// Only intercept Back command at Model level
-			if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack {
-				m.ExitUtilizationMode()
-				return m, nil
-			}
-			// Pass all keys to utilization dashboard for handling
 			if m.utilizationDashboard != nil {
+				if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil && cmd == keys.UtilizationCmdBack && !m.utilizationDashboard.showNodeDetails {
+					m.ExitUtilizationMode()
+					return m, nil
+				}
+
 				updated, cmd := m.utilizationDashboard.Update(msg)
 				m.utilizationDashboard = &updated
 				return m, cmd

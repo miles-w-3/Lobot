@@ -15,6 +15,9 @@ func (m Model) View() string {
 	var baseView string
 	if m.viewMode == ViewModeSplash {
 		baseView = m.splash.View()
+		if m.splash.IsError() {
+			baseView = m.renderSplashErrorHelp(baseView)
+		}
 	} else if m.viewMode == ViewModeManifest {
 		baseView = m.renderManifestView()
 	} else if m.viewMode == ViewModeVisualize {
@@ -41,6 +44,16 @@ func (m Model) View() string {
 	}
 
 	return baseView
+}
+
+// renderSplashErrorHelp renders registry-backed recovery shortcuts on the splash error screen.
+func (m Model) renderSplashErrorHelp(baseView string) string {
+	if m.width <= 0 || m.height <= 0 {
+		return baseView
+	}
+
+	help := lipgloss.PlaceHorizontal(m.width, lipgloss.Center, m.renderHelp())
+	return overlayAt(baseView, help, 0, m.height-2, m.width, m.height)
 }
 
 // renderNormalView renders the main resource list view
@@ -369,8 +382,17 @@ func (m Model) renderUtilizationView() string {
 		return "Loading metrics..."
 	}
 
-	content := m.utilizationDashboard.View()
 	help := m.renderHelp()
+	helpHeight := lipgloss.Height(help)
+	contentHeight := m.height - helpHeight
+	if contentHeight < 10 {
+		contentHeight = 10
+	}
+
+	dashboard := *m.utilizationDashboard
+	dashboard.width = m.width
+	dashboard.height = contentHeight
+	content := dashboard.View()
 
 	return lipgloss.JoinVertical(
 		lipgloss.Left,

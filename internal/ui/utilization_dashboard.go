@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/keys"
@@ -108,6 +109,70 @@ func (m *UtilizationDashboardModel) getSelectedNode() *k8s.NodeMetrics {
 }
 
 // resortModalPods re-sorts modal pods when category changes
+func (m *UtilizationDashboardModel) openNodeDetails() {
+	var selectedPod *k8s.PodMetrics
+	if m.focusedPanel == FocusPanelPods && m.selectedPod >= 0 && m.selectedPod < len(m.filteredPods) {
+		selectedPod = &m.filteredPods[m.selectedPod]
+	}
+
+	m.showNodeDetails = true
+	m.modalPods = make([]k8s.PodMetrics, len(m.filteredPods))
+	copy(m.modalPods, m.filteredPods)
+	m.resortModalPods()
+
+	if selectedPod != nil {
+		for i, pod := range m.modalPods {
+			if pod.Name == selectedPod.Name && pod.Namespace == selectedPod.Namespace && pod.NodeName == selectedPod.NodeName {
+				m.modalSelectedPod = i
+				break
+			}
+		}
+	}
+}
+
+func (m *UtilizationDashboardModel) focusNextPanel() {
+	if m.showNodeDetails {
+		m.selectNextModalPod()
+		return
+	}
+	if m.focusedPanel == FocusPanelNodes {
+		m.focusedPanel = FocusPanelPods
+	} else {
+		m.focusedPanel = FocusPanelNodes
+	}
+}
+
+func (m *UtilizationDashboardModel) focusPrevPanel() {
+	if m.showNodeDetails {
+		m.selectPrevModalPod()
+		return
+	}
+	m.focusNextPanel()
+}
+
+func (m *UtilizationDashboardModel) selectNextModalPod() {
+	if m.modalSelectedPod < len(m.modalPods)-1 {
+		m.modalSelectedPod++
+	}
+}
+
+func (m *UtilizationDashboardModel) selectPrevModalPod() {
+	if m.modalSelectedPod > 0 {
+		m.modalSelectedPod--
+	}
+}
+
+func (m *UtilizationDashboardModel) cycleResourceCategory() {
+	if m.resourceCategory == ResourceCategoryCPU {
+		m.resourceCategory = ResourceCategoryMemory
+	} else {
+		m.resourceCategory = ResourceCategoryCPU
+	}
+	if m.showNodeDetails {
+		m.resortModalPods()
+	}
+}
+
 func (m *UtilizationDashboardModel) resortModalPods() {
 	if m.resourceCategory == ResourceCategoryCPU {
 		sort.Slice(m.modalPods, func(i, j int) bool {
@@ -130,7 +195,11 @@ func (m UtilizationDashboardModel) Update(msg tea.Msg) (UtilizationDashboardMode
 			case keys.UtilizationCmdBack:
 				m.showNodeDetails = false
 			case keys.UtilizationCmdScrollUp:
-				if m.focusedPanel == FocusPanelNodes {
+				if m.showNodeDetails {
+					if m.modalSelectedPod > 0 {
+						m.modalSelectedPod--
+					}
+				} else if m.focusedPanel == FocusPanelNodes {
 					if m.selectedNode > -1 {
 						m.selectedNode--
 						m.filterPodsByNode()
@@ -141,7 +210,11 @@ func (m UtilizationDashboardModel) Update(msg tea.Msg) (UtilizationDashboardMode
 					}
 				}
 			case keys.UtilizationCmdScrollDown:
-				if m.focusedPanel == FocusPanelNodes {
+				if m.showNodeDetails {
+					if m.modalSelectedPod < len(m.modalPods)-1 {
+						m.modalSelectedPod++
+					}
+				} else if m.focusedPanel == FocusPanelNodes {
 					if m.selectedNode < len(m.nodeMetrics)-1 {
 						m.selectedNode++
 						m.filterPodsByNode()
@@ -154,29 +227,35 @@ func (m UtilizationDashboardModel) Update(msg tea.Msg) (UtilizationDashboardMode
 			case keys.UtilizationCmdPageUp:
 				if m.showNodeDetails {
 					if m.modalSelectedPod > 0 {
-						m.modalSelectedPod--
+						m.modalSelectedPod = max(0, m.modalSelectedPod-10)
 					}
 				} else if m.focusedPanel == FocusPanelNodes {
 					m.selectedNode = max(-1, m.selectedNode-5)
 					m.filterPodsByNode()
-				} else {
+				} else if len(m.filteredPods) > 0 {
 					m.selectedPod = max(0, m.selectedPod-10)
 				}
 			case keys.UtilizationCmdPageDown:
 				if m.showNodeDetails {
-					if m.modalSelectedPod < len(m.modalPods)-1 {
-						m.modalSelectedPod++
+					if len(m.modalPods) > 0 {
+						m.modalSelectedPod = min(len(m.modalPods)-1, m.modalSelectedPod+10)
 					}
 				} else if m.focusedPanel == FocusPanelNodes {
 					m.selectedNode = min(len(m.nodeMetrics)-1, m.selectedNode+5)
 					m.filterPodsByNode()
-				} else {
+				} else if len(m.filteredPods) > 0 {
 					m.selectedPod = min(len(m.filteredPods)-1, m.selectedPod+10)
 				}
 			case keys.UtilizationCmdPrevView:
-				m.resourceCategory = ResourceCategoryCPU
+				m.cycleResourceCategory()
 			case keys.UtilizationCmdNextView:
-				m.resourceCategory = ResourceCategoryMemory
+				m.cycleResourceCategory()
+			case keys.UtilizationCmdFocusNext:
+				m.focusNextPanel()
+			case keys.UtilizationCmdFocusPrev:
+				m.focusPrevPanel()
+			case keys.UtilizationCmdShowDetails:
+				m.openNodeDetails()
 			}
 			return m, nil
 		}
@@ -200,22 +279,34 @@ func (m *UtilizationDashboardModel) View() string {
 		return m.renderNodeDetailsModal()
 	}
 
-	// Tab bar header
+	outerWidth := m.width
+	outerHeight := m.height
+
+	// Outer border with horizontal padding consumes 4 columns and 2 rows.
+	contentWidth := outerWidth - 4
+	contentHeight := outerHeight - 2
+	if contentWidth < 20 {
+		contentWidth = 20
+	}
+	if contentHeight < 6 {
+		contentHeight = 6
+	}
+
 	tabBar := m.renderTabBar()
+	panelHeight := contentHeight - 2 // tab bar + spacer
+	if panelHeight < 4 {
+		panelHeight = 4
+	}
 
-	// Calculate panel widths
-	totalWidth := m.width - 4
-	nodesPanelWidth := totalWidth / 2
-	podsPanelWidth := totalWidth - nodesPanelWidth
+	gap := 1
+	panelsWidth := contentWidth - gap
+	nodesPanelWidth := panelsWidth / 2
+	podsPanelWidth := panelsWidth - nodesPanelWidth
 
-	// Build panels
-	nodesPanel := m.renderNodesPanel(nodesPanelWidth, m.height-10)
-	podsPanel := m.renderPodsPanel(podsPanelWidth, m.height-10)
+	nodesPanel := m.renderNodesPanel(nodesPanelWidth, panelHeight)
+	podsPanel := m.renderPodsPanel(podsPanelWidth, panelHeight)
+	panels := lipgloss.JoinHorizontal(lipgloss.Top, nodesPanel, strings.Repeat(" ", gap), podsPanel)
 
-	// Join panels horizontally
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, nodesPanel, podsPanel)
-
-	// Build full view
 	content := lipgloss.JoinVertical(
 		lipgloss.Left,
 		tabBar,
@@ -223,11 +314,12 @@ func (m *UtilizationDashboardModel) View() string {
 		panels,
 	)
 
-	// Wrap in border
 	borderStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(ColorBorder).
-		Padding(0, 1)
+		Padding(0, 1).
+		Width(contentWidth).
+		Height(contentHeight)
 
 	return borderStyle.Render(content)
 }
@@ -270,146 +362,203 @@ func (m *UtilizationDashboardModel) renderTabBar() string {
 
 // renderNodesPanel renders the nodes list with bar graphs
 func (m *UtilizationDashboardModel) renderNodesPanel(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Width(width).
-		Height(height)
-
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary).
-		MarginBottom(1)
-
-	title := titleStyle.Render("NODES")
-
-	var lines []string
-	lines = append(lines, title)
-
-	barWidth := width - 22
-	if barWidth < 10 {
-		barWidth = 10
+	innerWidth := width - 6   // border + horizontal padding
+	innerHeight := height - 4 // border + vertical padding
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	if innerHeight < 3 {
+		innerHeight = 3
 	}
 
-	// Add <All> option first
-	allPrefix := "  "
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
+	lines := []string{titleStyle.Render("NODES"), ""}
+
+	maxVisible := innerHeight - len(lines)
+	if maxVisible < 1 {
+		maxVisible = 1
+	}
+
+	selectedOption := m.selectedNode + 1 // <All Nodes> is option 0
+	startOption := 0
+	if selectedOption >= maxVisible {
+		startOption = selectedOption - maxVisible + 1
+	}
+	optionCount := len(m.nodeMetrics) + 1
+	endOption := min(optionCount, startOption+maxVisible)
+
+	for option := startOption; option < endOption; option++ {
+		if option == 0 {
+			lines = append(lines, m.renderAllNodesRow(innerWidth))
+			continue
+		}
+		lines = append(lines, m.renderNodeRow(option-1, innerWidth))
+	}
+
+	return utilizationPanelStyle(width, height).Render(strings.Join(lines, "\n"))
+}
+
+func utilizationPanelStyle(width, height int) lipgloss.Style {
+	contentWidth := width - 6   // border + horizontal padding
+	contentHeight := height - 4 // border + vertical padding
+	if contentWidth < 1 {
+		contentWidth = 1
+	}
+	if contentHeight < 1 {
+		contentHeight = 1
+	}
+
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(ColorBorder).
+		Padding(1, 2).
+		Width(contentWidth).
+		Height(contentHeight)
+}
+
+func (m *UtilizationDashboardModel) renderAllNodesRow(width int) string {
+	prefix := "  "
 	if m.selectedNode == -1 {
 		if m.focusedPanel == FocusPanelNodes {
-			allPrefix = "▶ "
+			prefix = "▶ "
 		} else {
-			allPrefix = "● "
+			prefix = "● "
 		}
 	}
 
-	allStyle := lipgloss.NewStyle()
+	line := prefix + truncateVisibleString("<All Nodes>", max(1, width-lipgloss.Width(prefix)))
+	lineStyle := lipgloss.NewStyle()
 	if m.selectedNode == -1 && m.focusedPanel == FocusPanelNodes {
-		allStyle = allStyle.Bold(true).Foreground(ColorAccent)
+		lineStyle = lineStyle.Bold(true).Foreground(ColorAccent)
 	}
-	lines = append(lines, allStyle.Render(fmt.Sprintf("%s<All Nodes>", allPrefix)))
+	return lineStyle.Render(line)
+}
 
-	// Add each node
-	for i, node := range m.nodeMetrics {
-		var percentage float64
-		if m.resourceCategory == ResourceCategoryCPU {
-			percentage = m.calculateCPUPercentage(node)
+func (m *UtilizationDashboardModel) renderNodeRow(index, width int) string {
+	// Leave slack for Lip Gloss border/padding edge cases; exact-width styled rows
+	// can wrap in some terminals even when visible width appears correct.
+	width = max(1, width-3)
+	node := m.nodeMetrics[index]
+	var percentage float64
+	if m.resourceCategory == ResourceCategoryCPU {
+		percentage = m.calculateCPUPercentage(node)
+	} else {
+		percentage = m.calculateMemoryPercentage(node)
+	}
+
+	prefix := "  "
+	if index == m.selectedNode {
+		if m.focusedPanel == FocusPanelNodes {
+			prefix = "▶ "
 		} else {
-			percentage = m.calculateMemoryPercentage(node)
+			prefix = "● "
 		}
-
-		bar := m.renderBar(percentage, barWidth)
-
-		prefix := "  "
-		if i == m.selectedNode {
-			if m.focusedPanel == FocusPanelNodes {
-				prefix = "▶ "
-			} else {
-				prefix = "● "
-			}
-		}
-
-		nodeName := truncateString(node.Name, 12)
-		line := fmt.Sprintf("%s%-12s %s", prefix, nodeName, bar)
-
-		lineStyle := lipgloss.NewStyle()
-		if i == m.selectedNode && m.focusedPanel == FocusPanelNodes {
-			lineStyle = lineStyle.Bold(true).Foreground(ColorAccent)
-		}
-
-		lines = append(lines, lineStyle.Render(line))
 	}
 
-	return panelStyle.Render(strings.Join(lines, "\n"))
+	prefixWidth := lipgloss.Width(prefix)
+	separatorWidth := 1
+	barWidth := 10
+	barRenderedWidth := barWidth + 2 // renderBar adds brackets
+	nameWidth := width - prefixWidth - separatorWidth - barRenderedWidth
+	if nameWidth < 1 {
+		nameWidth = 1
+	}
+
+	nodeName := truncateVisibleString(node.Name, nameWidth)
+	line := fitVisibleLine(fmt.Sprintf("%s%s %s", prefix, nodeName, m.renderBar(percentage, barWidth)), width)
+
+	lineStyle := lipgloss.NewStyle()
+	if index == m.selectedNode && m.focusedPanel == FocusPanelNodes {
+		lineStyle = lineStyle.Bold(true).Foreground(ColorAccent)
+	}
+	return lineStyle.Render(line)
 }
 
 // renderPodsPanel renders the pods list with simple usage values (no bar graphs)
 func (m *UtilizationDashboardModel) renderPodsPanel(width, height int) string {
-	panelStyle := lipgloss.NewStyle().
-		Width(width).
-		Height(height)
+	innerWidth := width - 6   // border + horizontal padding
+	innerHeight := height - 4 // border + vertical padding
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	if innerHeight < 3 {
+		innerHeight = 3
+	}
 
-	titleStyle := lipgloss.NewStyle().
-		Bold(true).
-		Foreground(ColorPrimary).
-		MarginBottom(1)
-
+	titleStyle := lipgloss.NewStyle().Bold(true).Foreground(ColorPrimary)
 	var titleText string
 	if m.selectedNode == -1 {
 		titleText = "PODS (All Nodes)"
 	} else if m.selectedNode < len(m.nodeMetrics) {
 		titleText = fmt.Sprintf("PODS ON: %s", m.nodeMetrics[m.selectedNode].Name)
 	}
-	title := titleStyle.Render(titleText)
 
-	var lines []string
-	lines = append(lines, title)
+	lines := []string{titleStyle.Render(truncateVisibleString(titleText, innerWidth)), ""}
 
 	if len(m.filteredPods) == 0 {
 		lines = append(lines, lipgloss.NewStyle().Foreground(ColorMuted).Render("  No pods"))
 	} else {
-		// Limit visible pods based on height
-		maxVisible := height - 3
+		maxVisible := innerHeight - len(lines)
+		if maxVisible < 1 {
+			maxVisible = 1
+		}
 		startIdx := 0
 		if m.selectedPod >= maxVisible {
 			startIdx = m.selectedPod - maxVisible + 1
 		}
 
 		for i := startIdx; i < len(m.filteredPods) && i < startIdx+maxVisible; i++ {
-			pod := m.filteredPods[i]
-
-			prefix := "  "
-			if i == m.selectedPod {
-				if m.focusedPanel == FocusPanelPods {
-					prefix = "▶ "
-				} else {
-					prefix = "● "
-				}
-			}
-
-			// Show pod name and simple usage values instead of bar graph
-			podName := truncateString(pod.Name, 20)
-			var usageInfo string
-			if m.resourceCategory == ResourceCategoryCPU {
-				cpuMillis := pod.CPUUsage.MilliValue()
-				if cpuMillis >= 1000 {
-					usageInfo = fmt.Sprintf("%.2f cores", float64(cpuMillis)/1000)
-				} else {
-					usageInfo = fmt.Sprintf("%dm", cpuMillis)
-				}
-			} else {
-				memBytes := pod.MemoryUsage.Value()
-				usageInfo = formatBytes(memBytes)
-			}
-
-			line := fmt.Sprintf("%s%-20s  %s", prefix, podName, usageInfo)
-
-			lineStyle := lipgloss.NewStyle()
-			if i == m.selectedPod && m.focusedPanel == FocusPanelPods {
-				lineStyle = lineStyle.Bold(true).Foreground(ColorAccent)
-			}
-
-			lines = append(lines, lineStyle.Render(line))
+			lines = append(lines, m.renderPodRow(i, innerWidth))
 		}
 	}
 
-	return panelStyle.Render(strings.Join(lines, "\n"))
+	return utilizationPanelStyle(width, height).Render(strings.Join(lines, "\n"))
+}
+
+func (m *UtilizationDashboardModel) renderPodRow(index, width int) string {
+	// Leave several columns of slack so Lip Gloss/terminal wrapping never eats
+	// the usage value onto the next line when borders and padding are present.
+	width = max(1, width-4)
+	pod := m.filteredPods[index]
+
+	prefix := "  "
+	if index == m.selectedPod {
+		if m.focusedPanel == FocusPanelPods {
+			prefix = "▶ "
+		} else {
+			prefix = "● "
+		}
+	}
+
+	var usageInfo string
+	if m.resourceCategory == ResourceCategoryCPU {
+		cpuMillis := pod.CPUUsage.MilliValue()
+		if cpuMillis >= 1000 {
+			usageInfo = fmt.Sprintf("%.2f cores", float64(cpuMillis)/1000)
+		} else {
+			usageInfo = fmt.Sprintf("%dm", cpuMillis)
+		}
+	} else {
+		usageInfo = formatBytes(pod.MemoryUsage.Value())
+	}
+
+	prefixWidth := lipgloss.Width(prefix)
+	usageWidth := max(6, lipgloss.Width(usageInfo))
+	gapWidth := 2
+	nameWidth := width - prefixWidth - gapWidth - usageWidth
+	if nameWidth < 1 {
+		nameWidth = 1
+	}
+
+	podName := padRightVisible(truncateVisibleString(pod.Name, nameWidth), nameWidth)
+	usage := padLeftVisible(truncateVisibleString(usageInfo, usageWidth), usageWidth)
+	line := fitVisibleLine(fmt.Sprintf("%s%s%s%s", prefix, podName, strings.Repeat(" ", gapWidth), usage), width)
+
+	lineStyle := lipgloss.NewStyle()
+	if index == m.selectedPod && m.focusedPanel == FocusPanelPods {
+		lineStyle = lineStyle.Bold(true).Foreground(ColorAccent)
+	}
+	return lineStyle.Render(line)
 }
 
 // renderNodeDetailsModal renders a modal with node details and pod breakdown
@@ -437,7 +586,8 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 		content.WriteString(headerStyle.Render("All Nodes (Cluster Summary)"))
 		content.WriteString("\n\n")
 
-		content.WriteString(specStyle.Render(fmt.Sprintf("Cluster Info (%d nodes)\n", len(m.nodeMetrics))))
+		content.WriteString(specStyle.Render(fmt.Sprintf("Cluster Info (%d nodes)", len(m.nodeMetrics))))
+		content.WriteString("\n")
 
 		// Aggregate all node metrics
 		for _, n := range m.nodeMetrics {
@@ -461,7 +611,8 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 		content.WriteString(headerStyle.Render(fmt.Sprintf("Node: %s", node.Name)))
 		content.WriteString("\n\n")
 
-		content.WriteString(specStyle.Render("System Info\n"))
+		content.WriteString(specStyle.Render("System Info"))
+		content.WriteString("\n")
 		content.WriteString(fmt.Sprintf("  %s %s  %s %s  %s %s\n",
 			labelStyle.Render("OS:"), node.OS,
 			labelStyle.Render("Arch:"), node.Architecture,
@@ -482,30 +633,36 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	}
 
 	// Resource usage section
-	content.WriteString(specStyle.Render("Resource Usage\n"))
+	content.WriteString(specStyle.Render("Resource Usage"))
+	content.WriteString("\n")
 
 	// CPU info
 	cpuPercent := float64(0)
 	if cpuTotalMillis > 0 {
 		cpuPercent = float64(cpuUsedMillis) / float64(cpuTotalMillis) * 100
 	}
-	// Align "CPU:" (4 chars) with "Memory:" (7 chars) by adding 3 spaces padding
-	content.WriteString(fmt.Sprintf("  %s   %.2f / %.2f cores (%.1f%%)\n",
-		labelStyle.Render("CPU:"),
-		float64(cpuUsedMillis)/1000,
-		float64(cpuTotalMillis)/1000,
-		cpuPercent))
+	content.WriteString(renderMetricLine(
+		labelStyle,
+		"CPU:",
+		fmt.Sprintf("%.2f / %.2f cores (%.1f%%)",
+			float64(cpuUsedMillis)/1000,
+			float64(cpuTotalMillis)/1000,
+			cpuPercent),
+	))
 
 	// Memory info
 	memPercent := float64(0)
 	if memTotalBytes > 0 {
 		memPercent = float64(memUsedBytes) / float64(memTotalBytes) * 100
 	}
-	content.WriteString(fmt.Sprintf("%s %s / %s (%.1f%%)\n",
-		labelStyle.Render("Memory:"),
-		formatBytes(memUsedBytes),
-		formatBytes(memTotalBytes),
-		memPercent))
+	content.WriteString(renderMetricLine(
+		labelStyle,
+		"Memory:",
+		fmt.Sprintf("%s / %s (%.1f%%)",
+			formatBytes(memUsedBytes),
+			formatBytes(memTotalBytes),
+			memPercent),
+	))
 	content.WriteString("\n")
 
 	// Pod breakdown with stacked bar graph
@@ -513,7 +670,8 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 	if m.resourceCategory == ResourceCategoryMemory {
 		categoryLabel = "Memory"
 	}
-	content.WriteString(specStyle.Render(fmt.Sprintf("Pod %s Breakdown (%d pods)\n", categoryLabel, len(m.modalPods))))
+	content.WriteString(specStyle.Render(fmt.Sprintf("Pod %s Breakdown (%d pods)", categoryLabel, len(m.modalPods))))
+	content.WriteString("\n")
 
 	// Render the stacked bar with selection indicator
 	barWidth := 60
@@ -560,9 +718,7 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 		content.WriteString(detailStyle.Render(detailContent.String()))
 	}
 
-	content.WriteString("\n\n")
-	helpText := lipgloss.NewStyle().Foreground(ColorMuted).Italic(true)
-	content.WriteString(helpText.Render(",/. select pod  ←→ switch category  d/q close"))
+	content.WriteString("\n")
 
 	// Wrap in modal box
 	modalWidth := min(m.width-8, 80)
@@ -579,6 +735,15 @@ func (m *UtilizationDashboardModel) renderNodeDetailsModal() string {
 		lipgloss.Center,
 		modalBox.Render(content.String()),
 	)
+}
+
+func renderMetricLine(labelStyle lipgloss.Style, label, value string) string {
+	const labelWidth = len("Memory:")
+	padding := labelWidth - lipgloss.Width(label)
+	if padding < 0 {
+		padding = 0
+	}
+	return "  " + labelStyle.Render(label) + strings.Repeat(" ", padding) + " " + value + "\n"
 }
 
 // renderStackedBarWithSelection renders a stacked bar with white pointer under selected segment
@@ -791,13 +956,32 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%dB", bytes)
 }
 
-// truncateString truncates a string to the given length with ellipsis
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
+func truncateVisibleString(s string, maxWidth int) string {
+	if maxWidth <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, maxWidth, "...")
+}
+
+func padRightVisible(s string, width int) string {
+	padding := width - lipgloss.Width(s)
+	if padding <= 0 {
 		return s
 	}
-	if maxLen <= 3 {
-		return s[:maxLen]
+	return s + strings.Repeat(" ", padding)
+}
+
+func padLeftVisible(s string, width int) string {
+	padding := width - lipgloss.Width(s)
+	if padding <= 0 {
+		return s
 	}
-	return s[:maxLen-3] + "..."
+	return strings.Repeat(" ", padding) + s
+}
+
+func fitVisibleLine(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(s, width, "")
 }

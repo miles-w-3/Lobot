@@ -15,6 +15,9 @@ const (
 	UtilizationCmdPageDown
 	UtilizationCmdNextView
 	UtilizationCmdPrevView
+	UtilizationCmdFocusNext
+	UtilizationCmdFocusPrev
+	UtilizationCmdShowDetails
 )
 
 func NewUtilizationRegistry() *command.Registry[UtilizationCmd] {
@@ -26,9 +29,13 @@ func NewUtilizationRegistry() *command.Registry[UtilizationCmd] {
 	navigation.Add("pgup", UtilizationCmdPageUp)
 	navigation.Add("pgdown", UtilizationCmdPageDown)
 
-	view := r.NewUnifiedCommandGroup("View", "switch view")
-	view.Add("right", UtilizationCmdNextView).WithAlternates("l")
-	view.Add("left", UtilizationCmdPrevView).WithAlternates("h")
+	focus := r.NewUnifiedCommandGroup("Focus", "switch panel")
+	focus.Add("right", UtilizationCmdFocusNext).WithAlternates("l")
+	focus.Add("left", UtilizationCmdFocusPrev).WithAlternates("h")
+
+	view := r.NewCommandGroup("View")
+	view.Add("tab", UtilizationCmdNextView).WithDescription("switch metric")
+	view.Add("d", UtilizationCmdShowDetails).WithAlternates("enter").WithDescription("node details")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit dashboard")
 	exit.Add("esc", UtilizationCmdBack).WithAlternates("q")

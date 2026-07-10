@@ -93,12 +93,24 @@ func (svc *ResourceService) FinalizeConfiguration(onUpdate UpdateCallback) error
 
 // GetResources returns resources for the given GVR
 func (svc *ResourceService) GetResources(gvr schema.GroupVersionResource) []TrackedObject {
-	return svc.informer.GetResources(gvr)
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return nil
+	}
+	return informer.GetResources(gvr)
 }
 
 // GetNamespaces returns all namespaces in the cluster
 func (svc *ResourceService) GetNamespaces() []string {
-	return svc.informer.GetNamespaces()
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return nil
+	}
+	return informer.GetNamespaces()
 }
 
 // GetClient returns the current Kubernetes client
@@ -108,6 +120,9 @@ func (svc *ResourceService) GetClient() *Client {
 
 // GetClusterName returns the current cluster name
 func (svc *ResourceService) GetClusterName() string {
+	if svc.client == nil {
+		return "<Unknown Cluster>"
+	}
 	if svc.client.Context != "" {
 		return svc.client.Context
 	}
@@ -119,22 +134,40 @@ func (svc *ResourceService) GetClusterName() string {
 
 // GetResourcesByOwnerUID returns resources owned by the given UID
 func (svc *ResourceService) GetResourcesByOwnerUID(uid string) []TrackedObject {
-	return svc.informer.GetResourcesByOwnerUID(uid)
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return nil
+	}
+	return informer.GetResourcesByOwnerUID(uid)
 }
 
 // FetchResource fetches a resource using the dynamic client
 // This is used for resources not in the cache (e.g., owner references)
 func (svc *ResourceService) FetchResource(gvr schema.GroupVersionResource, name, namespace string, expectedUID string) TrackedObject {
-	return svc.informer.FetchResource(svc.ctx, gvr, name, namespace, expectedUID)
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return nil
+	}
+	return informer.FetchResource(svc.ctx, gvr, name, namespace, expectedUID)
 }
 
 // DiscoverResourceName uses the discovery API to find the resource name for a given Kind
 func (svc *ResourceService) DiscoverResourceName(gv schema.GroupVersion, kind string) (string, error) {
+	if svc.discovery == nil {
+		return "", fmt.Errorf("resource discovery is unavailable")
+	}
 	return svc.discovery.DiscoverResourceName(gv, kind)
 }
 
 // GetAllResourceTypes discovers all available resource types in the cluster
 func (svc *ResourceService) GetAllResourceTypes() ([]*TrackedType, error) {
+	if svc.discovery == nil {
+		return nil, fmt.Errorf("resource discovery is unavailable")
+	}
 	return svc.discovery.DiscoverAllResources()
 }
 
@@ -183,6 +216,7 @@ func (svc *ResourceService) SwitchContext(contextName string) error {
 		svc.informer.Stop()
 		svc.informer = nil
 	}
+	svc.discovery = nil
 	svc.mu.Unlock()
 
 	// Create new client for the context
@@ -203,9 +237,10 @@ func (svc *ResourceService) SwitchContext(contextName string) error {
 
 	// Perform health check on new context
 	if !svc.performHealthCheck() {
-		// Health check failed, error already sent to UI
-		// Don't initialize informers - user will see splash error state
-		return nil
+		// Health check failed, error already sent to UI.
+		// Return an error so callers do not continue with resource refreshes while
+		// the informer is intentionally unavailable.
+		return fmt.Errorf("unable to connect to context '%s'", contextName)
 	}
 
 	// Health check passed - initialize with new context
@@ -214,7 +249,7 @@ func (svc *ResourceService) SwitchContext(contextName string) error {
 			Type:  ServiceUpdateError,
 			Error: fmt.Errorf("failed to initialize informer for context '%s': %w", contextName, err),
 		})
-		return nil
+		return err
 	}
 
 	svc.logger.Info("Successfully switched context", "context", contextName)
@@ -233,12 +268,24 @@ func (svc *ResourceService) SwitchContext(contextName string) error {
 
 // StartInformer starts an informer for the given resource type
 func (svc *ResourceService) StartInformer(resourceType *TrackedType) error {
-	return svc.informer.StartInformer(svc.ctx, resourceType)
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return fmt.Errorf("informer is unavailable")
+	}
+	return informer.StartInformer(svc.ctx, resourceType)
 }
 
 // GetLastUpdateTime returns the last time a resource type was updated
 func (svc *ResourceService) GetLastUpdateTime(gvr schema.GroupVersionResource) time.Time {
-	return svc.informer.GetLastUpdateTime(gvr)
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	if informer == nil {
+		return time.Time{}
+	}
+	return informer.GetLastUpdateTime(gvr)
 }
 
 // Close cleans up the service

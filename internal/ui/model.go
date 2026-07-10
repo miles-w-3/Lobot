@@ -96,6 +96,7 @@ type Model struct {
 
 	// Command registries
 	globalRegistry      *command.Registry[keys.GlobalCmd]
+	splashRegistry      *command.Registry[keys.SplashCmd]
 	normalRegistry      *command.Registry[keys.NormalCmd]
 	filterRegistry      *command.Registry[keys.FilterCmd]
 	manifestRegistry    *command.Registry[keys.ManifestCmd]
@@ -110,6 +111,8 @@ type Model struct {
 // CurrentRegistry returns the command registry for the current view mode
 func (m Model) CurrentRegistry() command.RegistryInterface {
 	switch m.viewMode {
+	case ViewModeSplash:
+		return m.splashRegistry
 	case ViewModeFilter:
 		return m.filterRegistry
 	case ViewModeManifest:
@@ -179,6 +182,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 
 	// Create registries first so they can be shared
 	globalRegistry := keys.NewGlobalRegistry()
+	splashRegistry := keys.NewSplashRegistry()
 	normalRegistry := keys.NewNormalRegistry()
 	filterRegistry := keys.NewFilterRegistry()
 	manifestRegistry := keys.NewManifestRegistry()
@@ -204,6 +208,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		ready:                 false,
 		showingFavoriteTypes:  false,
 		globalRegistry:        globalRegistry,
+		splashRegistry:        splashRegistry,
 		normalRegistry:        normalRegistry,
 		filterRegistry:        filterRegistry,
 		manifestRegistry:      manifestRegistry,
@@ -527,13 +532,13 @@ func (m *Model) CurrentResourceType() *k8s.TrackedType {
 
 // RefreshCurrentResourceType triggers a refresh of the current resource type
 func (m *Model) startInformerWithSplash(resourceType *k8s.TrackedType) tea.Cmd {
-	currentType := m.CurrentResourceType()
 	return func() tea.Msg {
-		// Re-start the informer for the current resource type to trigger a refresh
-		// This will re-list all resources from the API server
-		err := m.resourceService.StartInformer(currentType)
+		// Re-start the informer for the selected resource type to trigger a refresh.
+		// This will re-list all resources from the API server.
+		err := m.resourceService.StartInformer(resourceType)
 		if err != nil {
-			m.logger.Error("Failed to refresh resource type", "type", currentType.DisplayName, "error", err)
+			m.logger.Error("Failed to refresh resource type", "type", resourceType.DisplayName, "error", err)
+			return ErrorMsg{Error: err}
 		}
 		return nil
 	}

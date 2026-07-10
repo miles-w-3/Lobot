@@ -17,7 +17,7 @@ func NewGlobalRegistry() *command.Registry[GlobalCmd] {
 	r := command.NewRegistry[GlobalCmd]()
 
 	actions := r.NewCommandGroup("Global Actions")
-	actions.Add("ctrl+c", GlobalCmdQuit).WithAlternates("q").WithDescription("quit")
+	actions.Add("q", GlobalCmdQuit).WithAlternates("ctrl+c").WithDescription("quit")
 	actions.Add("?", GlobalCmdHelp).WithDescription("help")
 	actions.Add("ctrl+p", GlobalCmdPalette).WithDescription("command palette")
 

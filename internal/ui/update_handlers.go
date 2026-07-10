@@ -18,6 +18,14 @@ func (m Model) openPalette() (Model, tea.Cmd) {
 	return m, m.paletteModel.Init()
 }
 
+func (m Model) handleSplashCommand(cmd keys.SplashCmd) (Model, tea.Cmd) {
+	switch cmd {
+	case keys.SplashCmdContextSelector:
+		return m, m.OpenContextSelector()
+	}
+	return m, nil
+}
+
 func (m Model) handleGlobalCommand(cmd keys.GlobalCmd) (Model, tea.Cmd) {
 	switch cmd {
 	case keys.GlobalCmdQuit:
@@ -32,6 +40,8 @@ func (m Model) handleGlobalCommand(cmd keys.GlobalCmd) (Model, tea.Cmd) {
 			var modeHelp string
 
 			switch m.viewMode {
+			case ViewModeSplash:
+				modeHelp = m.splashRegistry.FullView()
 			case ViewModeNormal:
 				modeHelp = m.normalRegistry.FullView()
 			case ViewModeFilter:
