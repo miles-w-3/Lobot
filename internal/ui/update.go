@@ -98,7 +98,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.errorTracker.LogError("system", msg.Error.Error())
 		}
 
-		if m.viewMode == ViewModeSplash {
+		if m.viewMode == ViewModeSplash || !m.ready {
+			m.viewMode = ViewModeSplash
+			m.ready = false
 			m.splash.MarkError(msg.Error)
 		} else {
 			m.modal.ShowError("Error", msg.Error.Error())

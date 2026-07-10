@@ -532,13 +532,13 @@ func (m *Model) CurrentResourceType() *k8s.TrackedType {
 
 // RefreshCurrentResourceType triggers a refresh of the current resource type
 func (m *Model) startInformerWithSplash(resourceType *k8s.TrackedType) tea.Cmd {
-	currentType := m.CurrentResourceType()
 	return func() tea.Msg {
-		// Re-start the informer for the current resource type to trigger a refresh
-		// This will re-list all resources from the API server
-		err := m.resourceService.StartInformer(currentType)
+		// Re-start the informer for the selected resource type to trigger a refresh.
+		// This will re-list all resources from the API server.
+		err := m.resourceService.StartInformer(resourceType)
 		if err != nil {
-			m.logger.Error("Failed to refresh resource type", "type", currentType.DisplayName, "error", err)
+			m.logger.Error("Failed to refresh resource type", "type", resourceType.DisplayName, "error", err)
+			return ErrorMsg{Error: err}
 		}
 		return nil
 	}
