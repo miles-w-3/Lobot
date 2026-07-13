@@ -239,15 +239,24 @@ func (l *GraphLayout) calculatePositions(containerWidth int) {
 		totalGapsWidth := (layerWidth - 1) * horizontalGap
 		totalLayerWidth := totalNodesWidth + totalGapsWidth
 
-		// Center layer horizontally if it fits in container
+		// Center single nodes and distribute multi-node layers across the
+		// available width. Dense layers retain the minimum horizontal gap and
+		// naturally overflow into the scrollable canvas.
 		startX := marginLeft
+		gap := horizontalGap
 		if totalLayerWidth < containerWidth {
-			startX = (containerWidth - totalLayerWidth) / 2
+			if layerWidth == 1 {
+				startX = (containerWidth - nodeWidth) / 2
+			} else {
+				usableWidth := containerWidth - 2*marginLeft
+				distributedGap := (usableWidth - totalNodesWidth) / (layerWidth - 1)
+				gap = max(horizontalGap, distributedGap)
+			}
 		}
 
 		// Position each node
 		for i, node := range layer {
-			x := startX + (i * (nodeWidth + horizontalGap))
+			x := startX + (i * (nodeWidth + gap))
 
 			l.nodePositions[node.graphNode] = Position{
 				X:      x,

@@ -1,7 +1,7 @@
 package ui
 
 import (
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/miles-w-3/lobot/internal/keys"
 )
 
@@ -35,29 +35,18 @@ func (m Model) handleGlobalCommand(cmd keys.GlobalCmd) (Model, tea.Cmd) {
 		if m.modal.IsVisible() && m.modal.modalType == ModalTypeHelp {
 			m.modal.Hide()
 		} else {
-			// Combine global and mode-specific help
+			// Combine global and active-mode help. CurrentRegistry accounts for
+			// selector overlays as well as ordinary view modes.
 			globalHelp := m.globalRegistry.FullView()
-			var modeHelp string
-
-			switch m.viewMode {
-			case ViewModeSplash:
-				modeHelp = m.splashRegistry.FullView()
-			case ViewModeNormal:
-				modeHelp = m.normalRegistry.FullView()
-			case ViewModeFilter:
-				modeHelp = m.filterRegistry.FullView()
-			case ViewModeManifest:
-				modeHelp = m.manifestRegistry.FullView()
-			case ViewModeVisualize:
-				if m.visualizer != nil {
+			modeHelp := m.CurrentRegistry().FullView()
+			if m.selector == nil || !m.selector.IsVisible() {
+				if m.viewMode == ViewModeVisualize && m.visualizer != nil {
 					if m.visualizer.mode == VisualizationModeTree {
 						modeHelp = m.treeRegistry.FullView()
 					} else {
 						modeHelp = m.graphRegistry.FullView()
 					}
 				}
-			case ViewModeUtilization:
-				modeHelp = m.utilizationRegistry.FullView()
 			}
 
 			helpContent := globalHelp + "\n\n" + modeHelp
@@ -152,16 +141,16 @@ func (m Model) handleManifestCommand(cmd keys.ManifestCmd) (Model, tea.Cmd) {
 		}
 		return m, cmd
 	case keys.ManifestCmdScrollUp:
-		m.manifestViewport.LineUp(1)
+		m.manifestViewport.ScrollUp(1)
 		return m, nil
 	case keys.ManifestCmdScrollDown:
-		m.manifestViewport.LineDown(1)
+		m.manifestViewport.ScrollDown(1)
 		return m, nil
 	case keys.ManifestCmdPageUp:
-		m.manifestViewport.HalfViewUp()
+		m.manifestViewport.HalfPageUp()
 		return m, nil
 	case keys.ManifestCmdPageDown:
-		m.manifestViewport.HalfViewDown()
+		m.manifestViewport.HalfPageDown()
 		return m, nil
 	}
 	return m, nil

@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/ui"
 	"k8s.io/klog/v2"
@@ -97,11 +97,7 @@ func run() error {
 	model := ui.NewModel(resourceService, logger, errorTracker)
 
 	// Create Bubbletea program
-	p := tea.NewProgram(
-		model,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	p := tea.NewProgram(model)
 
 	// Forward messages into the model and UI
 	processUpdateCallback := func(update k8s.ServiceUpdate) {

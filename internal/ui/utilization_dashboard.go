@@ -2,11 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"sort"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/k8s"
@@ -15,7 +16,7 @@ import (
 
 // podColors defines a consistent color palette for pod visualization.
 // Defined at package level to avoid reallocation on each render call.
-var podColors = []lipgloss.Color{
+var podColors = []color.Color{
 	lipgloss.Color("#00D4AA"), // teal
 	lipgloss.Color("#7C6BEE"), // purple
 	lipgloss.Color("#FF6B9D"), // pink
@@ -189,7 +190,7 @@ func (m *UtilizationDashboardModel) resortModalPods() {
 // Update handles messages for the dashboard
 func (m UtilizationDashboardModel) Update(msg tea.Msg) (UtilizationDashboardModel, tea.Cmd) {
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if cmd, err := m.utilizationRegistry.Dispatch(msg); err == nil {
 			switch cmd {
 			case keys.UtilizationCmdBack:
@@ -747,7 +748,7 @@ func renderMetricLine(labelStyle lipgloss.Style, label, value string) string {
 }
 
 // renderStackedBarWithSelection renders a stacked bar with white pointer under selected segment
-func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpuTotal int64, memTotal int64, colors []lipgloss.Color) (string, string) {
+func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpuTotal int64, memTotal int64, colors []color.Color) (string, string) {
 	if len(m.modalPods) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 		bar := "[" + emptyStyle.Render(strings.Repeat("▒", width)) + "]"
@@ -830,7 +831,7 @@ func (m *UtilizationDashboardModel) renderStackedBarWithSelection(width int, cpu
 }
 
 // renderStackedBar renders a single stacked bar with color-coded segments
-func (m *UtilizationDashboardModel) renderStackedBar(width int, cpuTotal int64, memTotal int64, colors []lipgloss.Color) string {
+func (m *UtilizationDashboardModel) renderStackedBar(width int, cpuTotal int64, memTotal int64, colors []color.Color) string {
 	if len(m.modalPods) == 0 {
 		emptyStyle := lipgloss.NewStyle().Foreground(ColorMuted)
 		return "  [" + emptyStyle.Render(strings.Repeat("▒", width)) + "]"
@@ -894,7 +895,7 @@ func (m *UtilizationDashboardModel) renderBar(percentage float64, width int) str
 	}
 
 	// Choose color based on percentage
-	var barColor lipgloss.Color
+	var barColor color.Color
 	if percentage >= 90 {
 		barColor = ColorDanger
 	} else if percentage >= 70 {
