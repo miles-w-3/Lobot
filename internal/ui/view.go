@@ -194,10 +194,9 @@ func (m Model) renderStatusLine() string {
 		rightParts = append(rightParts, metadataStyle.Render(fmt.Sprintf("updated %s", formatRelativeTime(lastUpdate))))
 	}
 
-	// Add refresh interval - all resources use the same 5-minute resync period
-	// All updates are event-driven via watch API; resync is just a safety net
-	refreshInterval := "resync: 5m"
-	rightParts = append(rightParts, metadataStyle.Render(refreshInterval))
+	// Informers stay current through Kubernetes LIST/WATCH and relist after
+	// disconnects; explicit refresh remains available from the command registry.
+	rightParts = append(rightParts, metadataStyle.Render("watch: live"))
 
 	right := strings.Join(rightParts, " • ")
 
@@ -225,6 +224,9 @@ func (m Model) renderFilterBar() string {
 
 // renderResourceTable renders the table of resources
 func (m Model) renderResourceTable() string {
+	if !m.resourceService.IsResourceReady(m.CurrentResourceType().GVR) {
+		return helpStyle.Render("Loading resources…")
+	}
 	if len(m.filteredResources) == 0 {
 		return helpStyle.Render("No resources found")
 	}

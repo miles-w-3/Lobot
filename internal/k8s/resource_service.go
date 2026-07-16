@@ -30,8 +30,10 @@ type ServiceUpdate struct {
 // UpdateCallback is called when the resource service has updates
 type UpdateCallback func(ServiceUpdate)
 
-// ResourceService manages Kubernetes resources and abstracts the informer lifecycle
-// It handles context switching by recreating the underlying client and informer
+const defaultInformerStartupConcurrency = 4
+
+// ResourceService manages Kubernetes resources and abstracts the informer lifecycle.
+// It handles context switching by recreating the underlying client and informer.
 type ResourceService struct {
 	onUpdate  UpdateCallback
 	mu        sync.Mutex // Only protects Stop() and pointer swaps during context switch
@@ -183,6 +185,12 @@ func (svc *ResourceService) ProcessEditedFile(ctx context.Context, resource Trac
 
 // GetAllNamespaces queries the Kubernetes API for all namespace names
 func (svc *ResourceService) GetAllNamespaces(ctx context.Context) ([]string, error) {
+	if namespaces := svc.GetNamespaces(); len(namespaces) > 0 {
+		return namespaces, nil
+	}
+
+	// Fall back to a direct request only while the Namespace informer is not
+	// available (for example during partial startup).
 	namespaceList, err := svc.client.Clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, err
@@ -277,6 +285,14 @@ func (svc *ResourceService) StartInformer(resourceType *TrackedType) error {
 	return informer.StartInformer(svc.ctx, resourceType)
 }
 
+// IsResourceReady reports whether a resource type completed its initial sync.
+func (svc *ResourceService) IsResourceReady(gvr schema.GroupVersionResource) bool {
+	svc.mu.Lock()
+	informer := svc.informer
+	svc.mu.Unlock()
+	return informer != nil && informer.IsResourceReady(gvr)
+}
+
 // GetLastUpdateTime returns the last time a resource type was updated
 func (svc *ResourceService) GetLastUpdateTime(gvr schema.GroupVersionResource) time.Time {
 	svc.mu.Lock()
@@ -332,16 +348,63 @@ func (svc *ResourceService) initializeInformer() error {
 	svc.discovery = NewResourceDiscovery(svc.client, svc.logger)
 	svc.mu.Unlock()
 
-	svc.logger.Debug("Starting informers")
+	startupTypes := startupResourceTypes()
+	svc.logger.Debug("Starting foreground informers", "count", len(startupTypes), "concurrency", defaultInformerStartupConcurrency)
+	startedAt := time.Now()
+	svc.startInformers(informer, startupTypes)
+	svc.logger.Debug("Foreground informers ready", "duration", time.Since(startedAt))
 
-	// Start informers for default resource types
-	for _, rt := range DefaultResourceTypes() {
-		if err := informer.StartInformer(svc.ctx, rt); err != nil {
-			svc.logger.Warn("Failed to start informer", "resource", rt.DisplayName, "error", err)
-		}
-	}
-
-	svc.logger.Debug("Done starting informers!")
+	backgroundTypes := backgroundResourceTypes(startupTypes)
+	go func() {
+		backgroundStartedAt := time.Now()
+		svc.logger.Debug("Warming background informers", "count", len(backgroundTypes))
+		svc.startInformers(informer, backgroundTypes)
+		svc.logger.Debug("Background informers ready", "duration", time.Since(backgroundStartedAt))
+	}()
 
 	return nil
+}
+
+func startupResourceTypes() []*TrackedType {
+	return []*TrackedType{
+		PodResource,
+		DeploymentResource,
+		ServiceResource,
+		ReplicaSetResource,
+	}
+}
+
+func backgroundResourceTypes(startupTypes []*TrackedType) []*TrackedType {
+	startup := make(map[schema.GroupVersionResource]bool, len(startupTypes))
+	for _, resourceType := range startupTypes {
+		startup[resourceType.GVR] = true
+	}
+
+	background := make([]*TrackedType, 0, len(DefaultResourceTypes())-len(startupTypes))
+	for _, resourceType := range DefaultResourceTypes() {
+		if !startup[resourceType.GVR] {
+			background = append(background, resourceType)
+		}
+	}
+	return background
+}
+
+func (svc *ResourceService) startInformers(informer *InformerManager, resourceTypes []*TrackedType) {
+	// Cache synchronization is independent for each resource type. Bound the
+	// concurrency so LIST requests overlap without overwhelming the API server.
+	semaphore := make(chan struct{}, defaultInformerStartupConcurrency)
+	var wg sync.WaitGroup
+	for _, resourceType := range resourceTypes {
+		wg.Add(1)
+		go func(rt *TrackedType) {
+			defer wg.Done()
+			semaphore <- struct{}{}
+			defer func() { <-semaphore }()
+
+			if err := informer.StartInformer(svc.ctx, rt); err != nil {
+				svc.logger.Warn("Failed to start informer", "resource", rt.DisplayName, "error", err)
+			}
+		}(resourceType)
+	}
+	wg.Wait()
 }
