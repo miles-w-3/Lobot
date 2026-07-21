@@ -59,6 +59,34 @@ func TestLatestHelmReleaseSecretsFiltersOldRevisionsBeforeDecode(t *testing.T) {
 	}
 }
 
+func TestEnqueueHelmRefreshCoalescesEvents(t *testing.T) {
+	manager := &InformerManager{helmRefreshCh: make(chan struct{}, 1)}
+	manager.enqueueHelmRefresh()
+	manager.enqueueHelmRefresh()
+	manager.enqueueHelmRefresh()
+	if got := len(manager.helmRefreshCh); got != 1 {
+		t.Fatalf("queued Helm refreshes = %d, want 1", got)
+	}
+}
+
+func TestIsHelmReleaseSecretEventHandlesTombstones(t *testing.T) {
+	helm := helmSecret("sample-v2", "apps", "sample", "2").GetRaw()
+	if !isHelmReleaseSecretEvent(cache.DeletedFinalStateUnknown{Obj: helm}) {
+		t.Fatal("Helm delete tombstone did not trigger a refresh")
+	}
+
+	nonHelm := &unstructured.Unstructured{Object: map[string]interface{}{
+		"type": "Opaque",
+	}}
+	if isHelmReleaseSecretEvent(nonHelm) {
+		t.Fatal("ordinary Secret unexpectedly triggered a Helm refresh")
+	}
+
+	if !isHelmReleaseSecretEvent(cache.DeletedFinalStateUnknown{Obj: struct{}{}}) {
+		t.Fatal("uninspectable delete tombstone must conservatively trigger a refresh")
+	}
+}
+
 func TestInitialInformerListReconcilesStoreOnce(t *testing.T) {
 	const objectCount = 250
 	gvr := ConfigMapResource.GVR

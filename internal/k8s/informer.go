@@ -200,21 +200,24 @@ func DefaultResourceTypes() []*TrackedType {
 
 // InformerManager manages dynamic informers for any resource type
 type InformerManager struct {
-	client             *Client
-	logger             *slog.Logger
-	dynamicClient      dynamic.Interface
-	factory            dynamicinformer.DynamicSharedInformerFactory
-	stopCh             chan struct{}
-	mu                 sync.RWMutex
-	resources          map[schema.GroupVersionResource][]TrackedObject
-	activeInformers    map[schema.GroupVersionResource]cache.SharedIndexInformer
-	updateCallback     UpdateCallback
-	ownerIndex         map[string][]TrackedObject // Maps owner UID to owned resources
-	helmResources      []TrackedObject            // Cached Helm releases (decoded from secrets)
-	helmPollingStarted bool                       // Tracks if Helm polling goroutine has been started
-	isInitialized      atomic.Bool
-	lastUpdateTime     map[schema.GroupVersionResource]time.Time // Tracks when each resource type was last updated
-	readyInformers     map[schema.GroupVersionResource]bool
+	client                   *Client
+	logger                   *slog.Logger
+	dynamicClient            dynamic.Interface
+	factory                  dynamicinformer.DynamicSharedInformerFactory
+	stopCh                   chan struct{}
+	mu                       sync.RWMutex
+	resources                map[schema.GroupVersionResource][]TrackedObject
+	activeInformers          map[schema.GroupVersionResource]cache.SharedIndexInformer
+	updateCallback           UpdateCallback
+	ownerIndex               map[string][]TrackedObject // Maps owner UID to owned resources
+	helmResources            []TrackedObject            // Cached Helm releases (decoded from secrets)
+	helmPollingStarted       bool                       // Tracks if Helm polling goroutine has been started
+	helmRefreshWorkerStarted bool
+	helmRefreshCh            chan struct{}
+	helmRefreshMu            sync.Mutex // Serializes polling, manual, and event-driven refreshes.
+	isInitialized            atomic.Bool
+	lastUpdateTime           map[schema.GroupVersionResource]time.Time // Tracks when each resource type was last updated
+	readyInformers           map[schema.GroupVersionResource]bool
 }
 
 // NewInformerManager creates a new dynamic informer manager
@@ -241,6 +244,7 @@ func NewInformerManager(client *Client, logger *slog.Logger, updateCallback Upda
 		activeInformers: make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
 		ownerIndex:      make(map[string][]TrackedObject),
 		helmResources:   []TrackedObject{},
+		helmRefreshCh:   make(chan struct{}, 1),
 		updateCallback:  updateCallback,
 		lastUpdateTime:  make(map[schema.GroupVersionResource]time.Time),
 		readyInformers:  make(map[schema.GroupVersionResource]bool),
@@ -398,26 +402,70 @@ func (im *InformerManager) checkResourceExists(gvr schema.GroupVersionResource) 
 	return true, nil
 }
 
-// handleSecretUpdate handles Secret updates and checks for Helm release secrets
+// handleSecretUpdate handles Secret updates and schedules a Helm refresh when needed.
 func (im *InformerManager) handleSecretUpdate(obj interface{}, gvr schema.GroupVersionResource) {
-	// First, handle the secret update normally
+	// First, handle the secret update normally.
 	im.handleResourceUpdate(gvr)
 
-	// Check if this is a Helm release secret
-	if unstructuredObj, ok := obj.(*unstructured.Unstructured); ok {
-		secretType, found, _ := unstructured.NestedString(unstructuredObj.Object, "type")
-		if found && secretType == "helm.sh/release.v1" {
-			// This is a Helm release secret - trigger Helm refresh
-			im.logger.Debug("Helm release secret detected, triggering refresh",
-				"name", unstructuredObj.GetName(),
-				"namespace", unstructuredObj.GetNamespace())
+	if !isHelmReleaseSecretEvent(obj) {
+		return
+	}
 
-			// Refresh Helm releases asynchronously to avoid blocking the informer
-			go func() {
-				if err := im.refreshHelmReleases(); err != nil {
-					im.logger.Error("Failed to refresh Helm releases after secret change", "error", err)
-				}
-			}()
+	// Helm upgrades can produce several Secret events in quick succession. A
+	// buffered wake-up coalesces them into one worker instead of launching an
+	// unbounded full Secret scan and decode for every event.
+	im.enqueueHelmRefresh()
+}
+
+// isHelmReleaseSecretEvent recognizes Helm Secrets, including delete tombstones.
+// If a tombstone cannot be inspected, refresh conservatively: it may be the
+// latest revision of a release and leaving stale data until the safety poll is
+// worse than one coalesced scan.
+func isHelmReleaseSecretEvent(obj interface{}) bool {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	} else if tombstone, ok := obj.(*cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+
+	unstructuredObj, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return true
+	}
+	return helmutil.IsHelmReleaseSecret(unstructuredObj)
+}
+
+func (im *InformerManager) enqueueHelmRefresh() {
+	select {
+	case im.helmRefreshCh <- struct{}{}:
+	default:
+		// A refresh is already queued or in progress.
+	}
+}
+
+func (im *InformerManager) runHelmRefreshWorker() {
+	const debounce = 100 * time.Millisecond
+
+	for {
+		select {
+		case <-im.stopCh:
+			return
+		case <-im.helmRefreshCh:
+		}
+
+		// Allow an upgrade's related Secret events to arrive before scanning the
+		// cache. The channel is capacity one, so events during a refresh request
+		// at most one follow-up pass.
+		timer := time.NewTimer(debounce)
+		select {
+		case <-im.stopCh:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		if err := im.refreshHelmReleases(); err != nil {
+			im.logger.Error("Failed to refresh Helm releases after Secret change", "error", err)
 		}
 	}
 }
@@ -789,18 +837,22 @@ func (im *InformerManager) FetchResource(ctx context.Context, gvr schema.GroupVe
 // This polling is just a safety net to catch any missed events
 func (im *InformerManager) startHelmReleasePolling(ctx context.Context) error {
 	im.mu.Lock()
-	// Check if polling is already started to prevent multiple goroutines
+	// Check if polling is already started to prevent multiple goroutines.
 	if im.helmPollingStarted {
 		im.mu.Unlock()
-		// Still refresh to update the data when user presses refresh
-		// Force timestamp update so user sees the refresh happened
+		// Still refresh to update the data when user presses refresh.
+		// Force timestamp update so user sees the refresh happened.
 		return im.refreshHelmReleasesWithTimestamp(true)
 	}
 	im.helmPollingStarted = true
+	if !im.helmRefreshWorkerStarted {
+		im.helmRefreshWorkerStarted = true
+		go im.runHelmRefreshWorker()
+	}
 	im.mu.Unlock()
 
-	// Import helm package here to avoid circular dependency
-	// We'll do the initial load synchronously
+	// Do the initial load synchronously. Events received while this runs are
+	// retained by helmRefreshCh and become one follow-up reconciliation.
 	if err := im.refreshHelmReleases(); err != nil {
 		return fmt.Errorf("failed initial Helm release fetch: %w", err)
 	}
@@ -833,6 +885,11 @@ func (im *InformerManager) startHelmReleasePolling(ctx context.Context) error {
 // This reads helm.sh/release.v1 secrets directly instead of using the Helm SDK
 // If forceUpdateTimestamp is true, the timestamp will be updated even if data hasn't changed
 func (im *InformerManager) refreshHelmReleasesWithTimestamp(forceUpdateTimestamp bool) error {
+	// Event-driven refreshes, the safety poll, and user refreshes may overlap.
+	// Serializing them prevents duplicate decode work and out-of-order cache swaps.
+	im.helmRefreshMu.Lock()
+	defer im.helmRefreshMu.Unlock()
+
 	// Get all secrets from the cache
 	secrets := im.GetResources(SecretResource.GVR)
 
