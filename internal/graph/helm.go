@@ -13,7 +13,7 @@ import (
 // BuildHelmGraph builds a graph for a Helm release showing all deployed resources
 func (b *Builder) BuildHelmGraph(helmRelease k8s.TrackedObject) *ResourceGraph {
 	graph := NewResourceGraph(helmRelease)
-	
+
 	// Type assert to HelmRelease to access specific fields
 	release, ok := helmRelease.(*k8s.HelmRelease)
 	if !ok {
@@ -52,8 +52,7 @@ func (b *Builder) BuildHelmGraph(helmRelease k8s.TrackedObject) *ResourceGraph {
 			// Since manifestRes is an interface holding a pointer, we can type assert and modify
 			if k8sRes, ok := manifestRes.(*k8s.K8sResource); ok {
 				k8sRes.Status = "Missing"
-				k8sRes.Kind = k8sRes.Kind + " [Missing]"
-				
+
 				node := graph.AddNode(k8sRes, RelationshipHelm)
 				node.Metadata["missing"] = "true"
 				graph.AddEdge(graph.Root, node, EdgeTypeHelmPart)
@@ -101,6 +100,7 @@ func (b *Builder) parseHelmManifest(manifest string, defaultNamespace string) []
 		namespace := obj.GetNamespace()
 		if namespace == "" {
 			namespace = defaultNamespace
+			obj.SetNamespace(namespace)
 		}
 
 		gvr, err := b.manifestResourceToGVR(obj)
@@ -122,7 +122,7 @@ func (b *Builder) findResourceInCluster(manifestResource k8s.TrackedObject) k8s.
 	// K8sResource has GVR field
 	var gvr schema.GroupVersionResource
 	var kind, apiVersion string
-	
+
 	if k8sRes, ok := manifestResource.(*k8s.K8sResource); ok {
 		gvr = k8sRes.GVR
 		kind = k8sRes.Kind
@@ -130,8 +130,6 @@ func (b *Builder) findResourceInCluster(manifestResource k8s.TrackedObject) k8s.
 	} else {
 		return nil
 	}
-
-
 
 	// Get all cached resources of this type
 	cachedResources := b.provider.GetResources(gvr)

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/charmbracelet/bubbles/table"
+	"charm.land/bubbles/v2/table"
 	"github.com/miles-w-3/lobot/internal/util"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"

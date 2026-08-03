@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type PaletteEntry struct {
@@ -29,28 +29,32 @@ type HelpStyles struct {
 	GroupSeparator lipgloss.Style
 }
 
-var DefaultHelpStyles = HelpStyles{
-	ShortKey: lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#06bf88")). // Hardcoded ColorPrimary for now, or use ui.ColorPrimary if import cycle allows (unlikely, better command package is independent)
-		Bold(true),
-	ShortDesc: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#B2B2B2", Dark: "#626262"}),
-	ShortSeparator: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#DDDADA", Dark: "#3C3C3C"}).
-		Inline(true),
-	FullKey: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#909090", Dark: "#626262"}).
-		Bold(true),
-	FullDesc: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#B2B2B2", Dark: "#4A4A4A"}),
-	FullSeparator: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#DDDADA", Dark: "#3C3C3C"}),
-	FullGroup: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}).
-		Bold(true).
-		Underline(true),
-	GroupSeparator: lipgloss.NewStyle().
-		Foreground(lipgloss.AdaptiveColor{Light: "#DDDADA", Dark: "#3C3C3C"}),
+// DefaultHelpStyles returns help styles for the detected terminal background.
+func DefaultHelpStyles(isDark bool) HelpStyles {
+	lightDark := lipgloss.LightDark(isDark)
+	return HelpStyles{
+		ShortKey: lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#06bf88")).
+			Bold(true),
+		ShortDesc: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#B2B2B2"), lipgloss.Color("#626262"))),
+		ShortSeparator: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#DDDADA"), lipgloss.Color("#3C3C3C"))).
+			Inline(true),
+		FullKey: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#087F5B"), lipgloss.Color("#5EE6B0"))).
+			Bold(true),
+		FullDesc: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#344054"), lipgloss.Color("#D0D5DD"))),
+		FullSeparator: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#98A2B3"), lipgloss.Color("#7C8799"))),
+		FullGroup: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#101828"), lipgloss.Color("#F2F4F7"))).
+			Bold(true).
+			Underline(true),
+		GroupSeparator: lipgloss.NewStyle().
+			Foreground(lightDark(lipgloss.Color("#98A2B3"), lipgloss.Color("#7C8799"))),
+	}
 }
 
 type HelpConfig struct {
@@ -61,7 +65,7 @@ type HelpConfig struct {
 func NewHelpConfig() HelpConfig {
 	return HelpConfig{
 		Width:  80,
-		Styles: DefaultHelpStyles,
+		Styles: DefaultHelpStyles(true),
 	}
 }
 
@@ -88,6 +92,7 @@ type RegistryInterface interface {
 	ShortView() string
 	FullView() string
 	PaletteEntries() []PaletteEntry
+	SetHelpConfig(HelpConfig)
 }
 
 func NewRegistry[T comparable]() *Registry[T] {
@@ -134,7 +139,7 @@ func (r *Registry[T]) Build() error {
 	return nil
 }
 
-func (r *Registry[T]) Dispatch(msg tea.KeyMsg) (T, error) {
+func (r *Registry[T]) Dispatch(msg tea.KeyPressMsg) (T, error) {
 	keyStr := msg.String()
 	log := slog.Default()
 	log.Debug("Dispatching key", "key", keyStr)
@@ -158,10 +163,48 @@ func (r *Registry[T]) DispatchString(keyStr string) (T, error) {
 }
 
 func (r *Registry[T]) WithConfig(cfg HelpConfig) *Registry[T] {
+	r.SetHelpConfig(cfg)
+	return r
+}
+
+// SetHelpConfig updates help styling and invalidates cached renderings.
+func (r *Registry[T]) SetHelpConfig(cfg HelpConfig) {
 	r.helpConfig = cfg
 	r.shortHelp = ""
 	r.fullHelp = ""
-	return r
+}
+
+// ShortSeparator renders the separator configured for short help.
+func (r *Registry[T]) ShortSeparator(text string) string {
+	return r.helpConfig.Styles.ShortSeparator.Render(text)
+}
+
+// KeysForCommand returns the primary key followed by all alternates.
+func (r *Registry[T]) KeysForCommand(cmd T) []string {
+	entry, ok := r.EntryForCommand(cmd)
+	if !ok {
+		return nil
+	}
+	return append([]string{entry.Key}, entry.AltKeys...)
+}
+
+// EntryForCommand returns the registry-backed palette entry for a command.
+func (r *Registry[T]) EntryForCommand(cmd T) (PaletteEntry, bool) {
+	for _, group := range r.groups {
+		for _, binding := range group.Commands {
+			if binding.Command == cmd {
+				return PaletteEntry{
+					Key:         binding.Key,
+					AltKeys:     append([]string(nil), binding.AltKeys...),
+					Display:     binding.Display,
+					Description: binding.Description,
+					Group:       group.Title,
+					Searchable:  append([]string(nil), binding.Searchable...),
+				}, true
+			}
+		}
+	}
+	return PaletteEntry{}, false
 }
 
 func (r *Registry[T]) ShortView() string {

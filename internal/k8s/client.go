@@ -17,6 +17,11 @@ import (
  * this is done because kubernetes semantics equate ""/unset with the default namespace,
  * but in Lobot we default to global scope
  */
+const (
+	startupClientQPS   = 20
+	startupClientBurst = 40
+)
+
 type CurrentScopedNamespace struct {
 	value    string
 	isGlobal bool
@@ -63,6 +68,7 @@ func NewClient(logger *slog.Logger) (*Client, error) {
 	}
 
 	logger.Info("Loaded Kubernetes configuration", "context", context, "cluster", clusterName)
+	configureClientPerformance(config)
 
 	// Create the clientset
 	clientset, err := kubernetes.NewForConfig(config)
@@ -82,6 +88,17 @@ func NewClient(logger *slog.Logger) (*Client, error) {
 		// could in future respect user config to load in from config
 		ScopedNS: CurrentScopedNamespace{value: "", isGlobal: true},
 	}, nil
+}
+
+// configureClientPerformance gives the bounded parallel informer startup enough
+// client-side request budget while preserving explicit kubeconfig overrides.
+func configureClientPerformance(config *rest.Config) {
+	if config.QPS == 0 {
+		config.QPS = startupClientQPS
+	}
+	if config.Burst == 0 {
+		config.Burst = startupClientBurst
+	}
 }
 
 // GetAvailableContexts returns all available contexts from kubeconfig
@@ -129,6 +146,7 @@ func NewClientWithContext(logger *slog.Logger, contextName string) (*Client, err
 	}
 
 	logger.Info("Loaded Kubernetes configuration", "context", contextName, "cluster", clusterName)
+	configureClientPerformance(config)
 
 	// Create the clientset
 	clientset, err := kubernetes.NewForConfig(config)

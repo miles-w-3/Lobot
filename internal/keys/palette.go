@@ -25,7 +25,7 @@ func NewPaletteRegistry() *command.Registry[PaletteCmd] {
 	actions.Add("enter", PaletteCmdEnter)
 
 	exit := r.NewCommandGroup("Exit")
-	exit.Add("esc", PaletteCmdBack).WithAlternates("q")
+	exit.Add("esc", PaletteCmdBack)
 
 	r.Build()
 

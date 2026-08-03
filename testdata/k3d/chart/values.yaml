@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image:
+  repository: nginx
+  tag: 1.27-alpine
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 16Mi
+  limits:
+    cpu: 50m
+    memory: 48Mi

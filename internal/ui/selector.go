@@ -4,8 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"unicode"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/erikgeiser/promptkit/selection"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/k8s"
@@ -23,10 +24,11 @@ const (
 
 // SelectorModel wraps the promptkit selection model
 type SelectorModel struct {
-	selection      *selection.Model[string]
-	selectorType   SelectorType
-	visible        bool
-	globalRegistry *command.Registry[keys.GlobalCmd]
+	selection        *selection.Model[string]
+	selectorType     SelectorType
+	visible          bool
+	globalRegistry   *command.Registry[keys.GlobalCmd]
+	selectorRegistry *command.Registry[keys.SelectorCmd]
 }
 
 // SelectorFinishedMsg is sent when a selector finishes
@@ -46,14 +48,14 @@ func NewNamespaceSelector(namespaces []string, current string, registry *command
 	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
 	sel.LoopCursor = true
 
-	// Create the selection model
-	model := selection.NewModel(sel)
-
+	selectorRegistry := keys.NewSelectorRegistry()
+	sel.KeyMap = selectorKeyMap(selectorRegistry)
 	return &SelectorModel{
-		selection:      model,
-		selectorType:   SelectorTypeNamespace,
-		visible:        true,
-		globalRegistry: registry,
+		selection:        selection.NewModel(sel),
+		selectorType:     SelectorTypeNamespace,
+		visible:          true,
+		globalRegistry:   registry,
+		selectorRegistry: selectorRegistry,
 	}
 }
 
@@ -63,15 +65,33 @@ func NewContextSelector(contexts []string, current string, registry *command.Reg
 	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
 	sel.LoopCursor = true
 
-	// Create the selection model
-	model := selection.NewModel(sel)
-
+	selectorRegistry := keys.NewSelectorRegistry()
+	sel.KeyMap = selectorKeyMap(selectorRegistry)
 	return &SelectorModel{
-		selection:      model,
-		selectorType:   SelectorTypeContext,
-		visible:        true,
-		globalRegistry: registry,
+		selection:        selection.NewModel(sel),
+		selectorType:     SelectorTypeContext,
+		visible:          true,
+		globalRegistry:   registry,
+		selectorRegistry: selectorRegistry,
 	}
+}
+
+func selectorKeyMap(registry *command.Registry[keys.SelectorCmd]) *selection.KeyMap {
+	return &selection.KeyMap{
+		Down:       registry.KeysForCommand(keys.SelectorCmdDown),
+		Up:         registry.KeysForCommand(keys.SelectorCmdUp),
+		Select:     registry.KeysForCommand(keys.SelectorCmdAccept),
+		Abort:      registry.KeysForCommand(keys.SelectorCmdCancel),
+		ScrollDown: registry.KeysForCommand(keys.SelectorCmdPageDown),
+		ScrollUp:   registry.KeysForCommand(keys.SelectorCmdPageUp),
+	}
+}
+
+// SetTheme applies the detected background to selector help.
+func (s *SelectorModel) SetTheme(isDark bool) {
+	cfg := command.NewHelpConfig()
+	cfg.Styles = command.DefaultHelpStyles(isDark)
+	s.selectorRegistry.SetHelpConfig(cfg)
 }
 
 // Init initializes the selector
@@ -87,60 +107,87 @@ func (s *SelectorModel) Update(msg tea.Msg) (*SelectorModel, tea.Cmd) {
 		return s, nil
 	}
 
-	// Track if this is a KeyMsg and what key was pressed
-	var keyStr string
-	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		keyStr = keyMsg.String()
-		logger.Debug("Selector received key", "key", keyStr, "type", s.selectorType)
+	if paste, ok := msg.(tea.PasteMsg); ok {
+		// Promptkit v0.11 does not forward PasteMsg to its embedded text input.
+		// Feed printable runes individually so pasted words such as "enter" are
+		// never mistaken for selector shortcuts.
+		var cmds []tea.Cmd
+		for _, r := range paste.Content {
+			if unicode.IsControl(r) {
+				continue
+			}
+			_, cmd := s.selection.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+			cmds = append(cmds, cmd)
+		}
+		return s, tea.Batch(cmds...)
+	}
 
-		// Check for esc to cancel
-		if keyStr == "esc" {
-			logger.Debug("Selector: esc pressed, cancelling")
-			s.visible = false
-			return s, func() tea.Msg {
-				return SelectorFinishedMsg{
-					SelectorType: s.selectorType,
-					Cancelled:    true,
-				}
+	var selectorCmd keys.SelectorCmd
+	var hasSelectorCmd bool
+	if keyMsg, ok := msg.(tea.KeyPressMsg); ok {
+		logger.Debug("Selector received key", "key", keyMsg.String(), "type", s.selectorType)
+
+		if globalCmd, err := s.globalRegistry.Dispatch(keyMsg); err == nil {
+			switch globalCmd {
+			case keys.GlobalCmdQuit, keys.GlobalCmdHelp:
+				return s.cancelCommand()
 			}
 		}
 
-		// Check global registry for quit/help
-		if cmd, err := s.globalRegistry.Dispatch(keyMsg); err == nil {
-			switch cmd {
-			case keys.GlobalCmdQuit, keys.GlobalCmdHelp:
-				logger.Debug("Selector: global command received, cancelling", "cmd", cmd)
-				s.visible = false
-				return s, func() tea.Msg {
-					return SelectorFinishedMsg{
-						SelectorType: s.selectorType,
-						Cancelled:    true,
-					}
-				}
+		if dispatched, err := s.selectorRegistry.Dispatch(keyMsg); err == nil {
+			selectorCmd = dispatched
+			hasSelectorCmd = true
+			if selectorCmd == keys.SelectorCmdCancel {
+				return s.cancelCommand()
 			}
 		}
 	}
 
-	// Pass all other messages to underlying selection model
-	logger.Debug("Selector: passing to promptkit", "msgType", "tea.KeyMsg")
+	// Promptkit owns navigation and filter input; the selector registry owns
+	// accept/cancel semantics around it.
 	_, cmd := s.selection.Update(msg)
-
-	// Only check for completion when Enter is pressed
-	if keyStr == "enter" {
-		if val, err := s.selection.Value(); err == nil && val != "" && s.visible {
-			logger.Debug("Selector: enter pressed with value, completing", "value", val)
-			s.visible = false
-			return s, func() tea.Msg {
-				return SelectorFinishedMsg{
-					SelectedValue: val,
-					SelectorType:  s.selectorType,
-					Cancelled:     false,
-				}
-			}
+	if hasSelectorCmd && selectorCmd == keys.SelectorCmdAccept {
+		if model, acceptCmd := s.acceptCommand(); acceptCmd != nil {
+			return model, acceptCmd
 		}
 	}
 
 	return s, cmd
+}
+
+// HandleCommand handles registry commands selected outside direct key input.
+func (s *SelectorModel) HandleCommand(cmd keys.SelectorCmd) (*SelectorModel, tea.Cmd) {
+	switch cmd {
+	case keys.SelectorCmdAccept:
+		return s.acceptCommand()
+	case keys.SelectorCmdCancel:
+		return s.cancelCommand()
+	default:
+		return s, nil
+	}
+}
+
+func (s *SelectorModel) acceptCommand() (*SelectorModel, tea.Cmd) {
+	if val, err := s.selection.Value(); err == nil && val != "" && s.visible {
+		s.visible = false
+		return s, func() tea.Msg {
+			return SelectorFinishedMsg{
+				SelectedValue: val,
+				SelectorType:  s.selectorType,
+			}
+		}
+	}
+	return s, nil
+}
+
+func (s *SelectorModel) cancelCommand() (*SelectorModel, tea.Cmd) {
+	s.visible = false
+	return s, func() tea.Msg {
+		return SelectorFinishedMsg{
+			SelectorType: s.selectorType,
+			Cancelled:    true,
+		}
+	}
 }
 
 // View renders the selector
@@ -148,7 +195,7 @@ func (s *SelectorModel) View() string {
 	if !s.visible {
 		return ""
 	}
-	return s.selection.View()
+	return s.selection.View().Content
 }
 
 // IsVisible returns whether the selector is currently visible
@@ -208,6 +255,7 @@ func (m *Model) OpenNamespaceSelector() tea.Cmd {
 	current := m.namespaceFilter.GetPattern()
 	logger.Debug("Opening namespace selector", "namespaceCount", len(namespaces), "current", current)
 	m.selector = NewNamespaceSelector(namespaces, current, m.globalRegistry)
+	m.selector.SetTheme(m.isDark)
 	return m.selector.Init()
 }
 
@@ -218,6 +266,7 @@ func (m *Model) OpenContextSelector() tea.Cmd {
 	current := m.resourceService.GetCurrentContext()
 	logger.Debug("Opening context selector", "contextCount", len(contexts), "current", current)
 	m.selector = NewContextSelector(contexts, current, m.globalRegistry)
+	m.selector.SetTheme(m.isDark)
 	return m.selector.Init()
 }
 
@@ -239,14 +288,14 @@ func NewResourceTypeSelector(resourceTypes []string, registry *command.Registry[
 	sel.Filter = selection.FilterContainsCaseInsensitive // Enable searchable filtering
 	sel.LoopCursor = true
 
-	// Create the selection model
-	model := selection.NewModel(sel)
-
+	selectorRegistry := keys.NewSelectorRegistry()
+	sel.KeyMap = selectorKeyMap(selectorRegistry)
 	return &SelectorModel{
-		selection:      model,
-		selectorType:   SelectorTypeResourceType,
-		visible:        true,
-		globalRegistry: registry,
+		selection:        selection.NewModel(sel),
+		selectorType:     SelectorTypeResourceType,
+		visible:          true,
+		globalRegistry:   registry,
+		selectorRegistry: selectorRegistry,
 	}
 }
 
@@ -256,6 +305,7 @@ func (m *Model) OpenResourceTypeSelector() tea.Cmd {
 	resourceTypes := m.getAllResourceTypes()
 	logger.Debug("Opening resource type selector", "typeCount", len(resourceTypes))
 	m.selector = NewResourceTypeSelector(resourceTypes, m.globalRegistry)
+	m.selector.SetTheme(m.isDark)
 	return m.selector.Init()
 }
 

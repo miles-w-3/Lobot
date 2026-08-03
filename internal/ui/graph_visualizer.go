@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"image/color"
 	"log"
 	"sort"
 	"strings"
@@ -9,9 +10,9 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
@@ -43,26 +44,34 @@ func NewGraphVisualizerModel(resourceGraph *graph.ResourceGraph, width, height i
 	initStart := time.Now()
 
 	detailsWidth := 35
-	graphWidth := width - detailsWidth - 2
+	// The graph starts without a details panel, so use the full available width.
+	// Viewport2D reserves one column on each side for scroll indicators.
+	graphWidth := max(1, width-2)
+	viewportWidth := max(3, graphWidth-4)
+	viewportHeight := max(3, height-8)
+	layoutWidth := max(1, viewportWidth-2)
 
 	// Calculate layout with timing
 	layoutStart := time.Now()
 	layout := NewGraphLayout()
-	layout.Calculate(resourceGraph, graphWidth-4)
+	layout.Calculate(resourceGraph, layoutWidth)
 	log.Printf("[GraphVisualizer] Layout calculation: duration=%v nodes=%d layers=%d",
 		time.Since(layoutStart), len(resourceGraph.Nodes), len(layout.layers))
 
-	// Calculate canvas dimensions - ensure enough space for all content
-	canvasWidth := max(layout.maxLayerWidth+2*marginLeft, graphWidth-4)
+	// Keep the canvas at least as wide as the viewport's content area. This
+	// avoids permanent, empty horizontal scroll indicators on fitting graphs.
+	canvasWidth := max(layout.maxLayerWidth+2*marginLeft, layoutWidth)
 	canvasHeight := layout.totalHeight
 	log.Printf("[GraphVisualizer] Canvas dimensions: width=%d height=%d (estimated memory: %d KB)",
 		canvasWidth, canvasHeight, (canvasWidth*canvasHeight*4)/1024)
 
 	// Create viewports
 	viewportStart := time.Now()
-	viewportHeight := height - 8
-	graphViewport := NewViewport2D(graphWidth-4, viewportHeight)
-	detailsViewport := viewport.New(detailsWidth-4, viewportHeight)
+	graphViewport := NewViewport2D(viewportWidth, viewportHeight)
+	detailsViewport := viewport.New(
+		viewport.WithWidth(detailsWidth-4),
+		viewport.WithHeight(viewportHeight),
+	)
 	log.Printf("[GraphVisualizer] Viewport creation: duration=%v", time.Since(viewportStart))
 
 	// Flatten nodes for navigation (layer by layer, left to right)
@@ -236,7 +245,7 @@ func (m *GraphVisualizerModel) renderNodeBox(node *graph.Node, selected bool) st
 	res := node.Resource
 
 	// Determine border color from status
-	var borderColor lipgloss.Color
+	var borderColor color.Color
 	status := strings.ToLower(res.GetStatus())
 	if strings.Contains(status, "running") ||
 		strings.Contains(status, "ready") ||
@@ -343,7 +352,7 @@ func (m GraphVisualizerModel) Update(msg tea.Msg) (GraphVisualizerModel, tea.Cmd
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if dispatchedCmd, err := m.registry.Dispatch(msg); err == nil {
 			switch dispatchedCmd {
 			// Navigation
@@ -499,10 +508,14 @@ func (m *GraphVisualizerModel) View() string {
 
 // renderGraphView renders the graph visualization panel
 func (m *GraphVisualizerModel) renderGraphView() string {
+	switchKey := ""
+	if entry, ok := m.registry.EntryForCommand(keys.GraphCmdSwitchToTree); ok {
+		switchKey = entry.Display
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
-		Render("▶ Resource Graph (G: tree view)")
+		Render(fmt.Sprintf("▶ Resource Graph (%s: tree view)", switchKey))
 
 	graphWidth := m.width - 2
 

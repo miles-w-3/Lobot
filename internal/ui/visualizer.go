@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"

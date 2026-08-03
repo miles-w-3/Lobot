@@ -17,7 +17,7 @@ func NewModalRegistry() *command.Registry[ModalCmd] {
 	r := command.NewRegistry[ModalCmd]()
 
 	exit := r.NewCommandGroup("Exit")
-	exit.Add("esc", ModalCmdBack).WithAlternates("q")
+	exit.Add("esc", ModalCmdBack).WithAlternates("enter").WithDescription("close")
 
 	scrolling := r.NewCommandGroup("Scrolling")
 	scrolling.Add("up", ModalCmdScrollUp).WithAlternates("k")

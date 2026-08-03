@@ -1,11 +1,12 @@
 package ui
 
 import (
+	"image/color"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/keys"
 )
@@ -43,7 +44,7 @@ func NewModal(registry *command.Registry[keys.GlobalCmd]) *Modal {
 		height:         10,
 		globalRegistry: registry,
 		modalRegistry:  keys.NewModalRegistry(),
-		viewport:       viewport.New(0, 0),
+		viewport:       viewport.New(),
 	}
 }
 
@@ -75,7 +76,7 @@ func (m *Modal) ShowInfo(title, message string) {
 
 // ShowHelpContent displays a help modal with pre-rendered content
 func (m *Modal) ShowHelpContent(content string) {
-	m.title = "Help - Press ? to close"
+	m.title = "Help"
 	m.message = content
 	m.modalType = ModalTypeHelp
 	m.visible = true
@@ -105,14 +106,14 @@ func (m *Modal) SetSize(width, height int) {
 	if vpHeight < 0 {
 		vpHeight = 0
 	}
-	m.viewport.Height = vpHeight
+	m.viewport.SetHeight(vpHeight)
 
 	// Width: modal width - border(2) - padding(4)
 	vpWidth := width - 6
 	if vpWidth < 0 {
 		vpWidth = 0
 	}
-	m.viewport.Width = vpWidth
+	m.viewport.SetWidth(vpWidth)
 }
 
 // Update handles messages for the modal
@@ -123,7 +124,7 @@ func (m *Modal) Update(msg tea.Msg) (*Modal, tea.Cmd) {
 
 	var cmd tea.Cmd
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		// Check global registry first for quit/help
 		if gcmd, err := m.globalRegistry.Dispatch(msg); err == nil {
 			switch gcmd {
@@ -141,12 +142,12 @@ func (m *Modal) Update(msg tea.Msg) (*Modal, tea.Cmd) {
 				return m, nil
 			case keys.ModalCmdScrollUp:
 				if m.modalType == ModalTypeHelp {
-					m.viewport.LineUp(1)
+					m.viewport.ScrollUp(1)
 				}
 				return m, nil
 			case keys.ModalCmdScrollDown:
 				if m.modalType == ModalTypeHelp {
-					m.viewport.LineDown(1)
+					m.viewport.ScrollDown(1)
 				}
 				return m, nil
 			}
@@ -179,7 +180,7 @@ func (m *Modal) View() string {
 // renderAlertModal renders error/warning/info/success modals
 func (m *Modal) renderAlertModal() string {
 	// Define styles based on modal type
-	var borderColor lipgloss.Color
+	var borderColor color.Color
 	var icon string
 
 	switch m.modalType {
@@ -218,7 +219,7 @@ func (m *Modal) renderAlertModal() string {
 	helpStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#666666")).
 		Italic(true)
-	helpText := helpStyle.Render("Press Enter or Esc to close")
+	helpText := helpStyle.Render("Press " + m.closeKeysLabel() + " to close")
 
 	// Join all content vertically (same pattern as help modal)
 	modalContent := lipgloss.JoinVertical(
@@ -243,13 +244,22 @@ func (m *Modal) renderAlertModal() string {
 }
 
 // renderHelpModal renders the help modal
+func (m *Modal) closeKeysLabel() string {
+	entry, ok := m.modalRegistry.EntryForCommand(keys.ModalCmdBack)
+	if !ok {
+		return ""
+	}
+	labels := append([]string{entry.Display}, entry.AltKeys...)
+	return strings.Join(labels, " / ")
+}
+
 func (m *Modal) renderHelpModal() string {
 	// Create help title
 	helpTitle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorAccent).
 		Padding(0, 1).
-		Render(m.title)
+		Render(m.title + " — " + m.closeKeysLabel() + " to close")
 
 	// Join title and viewport content
 	// Add scroll indicator if needed

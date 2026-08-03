@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/keys"
 	"github.com/miles-w-3/lobot/internal/splash"
@@ -28,26 +28,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
-	// Handle palette input if visible - only intercept KeyMsg, let other messages fall through
+	// The palette owns text and paste input while visible. Application messages
+	// such as PaletteSelectedMsg still fall through to the main switch.
 	if m.paletteVisible {
-		if keyMsg, ok := msg.(tea.KeyMsg); ok {
-			// Check for global commands (ctrl+c, esc, etc.) before palette consumes them
-			if cmd, err := m.globalRegistry.Dispatch(keyMsg); err == nil {
+		switch input := msg.(type) {
+		case tea.KeyPressMsg:
+			if cmd, err := m.globalRegistry.Dispatch(input); err == nil {
 				m.paletteVisible = false
 				return m.handleGlobalCommand(cmd)
 			}
-			// Pass other keys to palette
-			var cmd tea.Cmd
-			m.paletteModel, cmd = m.paletteModel.Update(keyMsg)
+			m.paletteModel, cmd = m.paletteModel.Update(input)
 			return m, cmd
+		case tea.PasteMsg:
+			m.paletteModel, cmd = m.paletteModel.Update(input)
+			return m, cmd
+		default:
+			// Cursor blink messages are private implementation details in
+			// Bubbles. Forward unknown messages and consume them only when the
+			// palette produces a follow-up command.
+			m.paletteModel, cmd = m.paletteModel.Update(input)
+			if cmd != nil {
+				return m, cmd
+			}
 		}
-		// Non-KeyMsg (like PaletteSelectedMsg) falls through to main switch below
+	}
+
+	if m.selector != nil && m.selector.IsVisible() {
+		switch input := msg.(type) {
+		case tea.PasteMsg:
+			m.selector, cmd = m.selector.Update(input)
+			return m, cmd
+		case tea.KeyPressMsg:
+			// Key presses are routed below so global commands retain priority.
+		default:
+			m.selector, cmd = m.selector.Update(input)
+			if cmd != nil {
+				return m, cmd
+			}
+		}
 	}
 
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		m.paletteModel.SetSize(m.width, m.height)
 
 		// Update splash screen size
 		m.splash.SetSize(m.width, m.height)
@@ -63,8 +88,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Update manifest viewport size if in manifest mode
 		if m.viewMode == ViewModeManifest {
-			m.manifestViewport.Width = m.width - 4
-			m.manifestViewport.Height = m.height - 6
+			m.manifestViewport.SetWidth(m.width - 4)
+			m.manifestViewport.SetHeight(m.height - 6)
 		}
 
 		// Update modal size
@@ -72,6 +97,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		modalHeight := min(20, m.height-10)
 		m.modal.SetSize(modalWidth, modalHeight)
 
+		return m, nil
+
+	case tea.BackgroundColorMsg:
+		m.applyTheme(msg.IsDark())
 		return m, nil
 
 	case splash.TickMsg:
@@ -170,11 +199,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case PaletteSelectedMsg:
 		m.paletteVisible = false
 		key := msg.Entry.Key
-		// Dispatch logic (Global then Mode)
 
-		// Global
 		if cmd, err := m.globalRegistry.DispatchString(key); err == nil {
 			return m.handleGlobalCommand(cmd)
+		}
+		if m.selector != nil && m.selector.IsVisible() {
+			if selectorCmd, err := m.selector.selectorRegistry.DispatchString(key); err == nil {
+				m.selector, cmd = m.selector.HandleCommand(selectorCmd)
+				return m, cmd
+			}
 		}
 
 		// Mode specific
@@ -270,19 +303,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case tea.KeyMsg:
-		// Handle palette input if visible - highest priority
-		if m.paletteVisible {
-			// Check for global commands (ctrl+c, esc, etc.) before palette consumes them
-			if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
-				m.paletteVisible = false
-				return m.handleGlobalCommand(cmd)
-			}
-			// Pass all other keys to palette
-			m.paletteModel, cmd = m.paletteModel.Update(msg)
-			return m, cmd
-		}
-
+	case tea.KeyPressMsg:
 		// Global keys - highest priority, always check global registry first
 		slog.Debug("Received key msg", "key", msg.String())
 		if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
@@ -362,7 +383,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// Modal gets priority for mouse events too
+		// Do not let pointer events affect content behind an overlay.
+		if m.paletteVisible || (m.selector != nil && m.selector.IsVisible()) {
+			return m, nil
+		}
 		if m.modal.IsVisible() {
 			m.modal, cmd = m.modal.Update(msg)
 			return m, cmd
@@ -401,23 +425,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // handleMouseEvent handles mouse input
 func (m Model) handleMouseEvent(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	switch msg.Button {
-	case tea.MouseButtonWheelUp:
-		m.MoveUp()
-	case tea.MouseButtonWheelDown:
-		m.MoveDown()
-	case tea.MouseButtonLeft:
-		if msg.Action == tea.MouseActionPress {
-			// Calculate which row was clicked
-			// Account for header (2 lines), filter bar (if active), and current scroll
-			clickedRow := msg.Y - 3 // Adjust for header and table header
+	switch msg := msg.(type) {
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			m.MoveUp()
+		case tea.MouseWheelDown:
+			m.MoveDown()
+		}
+	case tea.MouseClickMsg:
+		if msg.Button == tea.MouseLeft {
+			// Calculate which row was clicked, accounting for the table header.
+			clickedRow := msg.Y - 3
 			if m.viewMode == ViewModeFilter {
-				clickedRow -= 2 // Account for filter bar
+				clickedRow -= 2
 			}
 
 			targetIndex := m.scrollOffset + clickedRow
 			if targetIndex >= 0 && targetIndex < len(m.filteredResources) {
 				m.selectedIndex = targetIndex
+				m.table.SetCursor(targetIndex)
 			}
 		}
 	}

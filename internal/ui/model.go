@@ -9,16 +9,15 @@ import (
 	"os/exec"
 	"strings"
 
+	"charm.land/bubbles/v2/table"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/alecthomas/chroma/v2/formatters"
 	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/atotto/clipboard"
-	"github.com/charmbracelet/bubbles/help"
-	"github.com/charmbracelet/bubbles/table"
-	"github.com/charmbracelet/bubbles/textinput"
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/filters"
 	"github.com/miles-w-3/lobot/internal/graph"
@@ -72,7 +71,8 @@ type Model struct {
 	manifestResource k8s.TrackedObject // The resource being viewed in manifest mode
 
 	// Status
-	ready bool
+	ready  bool
+	isDark bool
 
 	// Modal
 	modal *Modal
@@ -110,6 +110,9 @@ type Model struct {
 
 // CurrentRegistry returns the command registry for the current view mode
 func (m Model) CurrentRegistry() command.RegistryInterface {
+	if m.selector != nil && m.selector.IsVisible() {
+		return m.selector.selectorRegistry
+	}
 	switch m.viewMode {
 	case ViewModeSplash:
 		return m.splashRegistry
@@ -176,7 +179,10 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 	graphBuilder := graph.NewBuilder(resourceService, nil)
 
 	// TODO: Replace these hardcoded values
-	favoriteTypesViewport := viewport.New(10, 30)
+	favoriteTypesViewport := viewport.New(
+		viewport.WithWidth(10),
+		viewport.WithHeight(30),
+	)
 
 	favoriteTypesViewport.SetContent("Test\nTest2\nTest3\n")
 
@@ -206,6 +212,7 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		splash:                splash.NewModel(logger),
 		table:                 t,
 		ready:                 false,
+		isDark:                true,
 		showingFavoriteTypes:  false,
 		globalRegistry:        globalRegistry,
 		splashRegistry:        splashRegistry,
@@ -217,24 +224,40 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		utilizationRegistry:   utilizationRegistry,
 		modal:                 NewModal(globalRegistry),
 		errorTracker:          errorTracker,
-		paletteModel:          NewPaletteModel(0, 0), // Width/height updated on WindowSizeMsg
+		paletteModel:          NewPaletteModel(0, 0, true), // Width/height updated on WindowSizeMsg
 	}
 }
 
-// configureHelp creates and configures the help model with brand colors
-func configureHelp() help.Model {
-	h := help.New()
-	h.Styles.ShortKey = lipgloss.NewStyle().Foreground(ColorAccent)
-	h.Styles.ShortDesc = lipgloss.NewStyle().Foreground(ColorMuted)
-	h.Styles.FullKey = lipgloss.NewStyle().Foreground(ColorAccent).Bold(true)
-	h.Styles.FullDesc = lipgloss.NewStyle().Foreground(ColorMuted)
-	h.Styles.FullSeparator = lipgloss.NewStyle().Foreground(ColorBorder)
-	return h
+// Init initializes the model and asks Bubble Tea to detect the terminal background.
+func (m Model) Init() tea.Cmd {
+	return tea.Batch(m.splash.Init(), tea.RequestBackgroundColor)
 }
 
-// Init initializes the model
-func (m Model) Init() tea.Cmd {
-	return m.splash.Init()
+// applyTheme updates components and registry help after background detection.
+func (m *Model) applyTheme(isDark bool) {
+	m.isDark = isDark
+
+	cfg := command.NewHelpConfig()
+	cfg.Styles = command.DefaultHelpStyles(isDark)
+	registries := []command.RegistryInterface{
+		m.globalRegistry,
+		m.splashRegistry,
+		m.normalRegistry,
+		m.filterRegistry,
+		m.manifestRegistry,
+		m.treeRegistry,
+		m.graphRegistry,
+		m.utilizationRegistry,
+	}
+	for _, registry := range registries {
+		registry.SetHelpConfig(cfg)
+	}
+
+	m.filterInput.SetStyles(textinput.DefaultStyles(isDark))
+	m.paletteModel.SetTheme(isDark)
+	if m.selector != nil {
+		m.selector.SetTheme(isDark)
+	}
 }
 
 // UpdateResources updates the displayed resources from the informer
@@ -329,13 +352,16 @@ func (m *Model) EnterManifestMode() tea.Cmd {
 	m.manifestContent = formatManifest(resource.GetRaw())
 
 	// Create viewport
-	m.manifestViewport = viewport.New(m.width-4, m.height-6)
+	m.manifestViewport = viewport.New(
+		viewport.WithWidth(m.width-4),
+		viewport.WithHeight(m.height-6),
+	)
 	m.manifestViewport.SetContent(m.manifestContent)
 
 	m.viewMode = ViewModeManifest
 
-	// Disable mouse to allow native terminal text selection
-	return tea.DisableMouse
+	// Model.View disables mouse reporting declaratively in manifest mode.
+	return nil
 }
 
 // ExitManifestMode exits manifest viewing mode
@@ -343,8 +369,8 @@ func (m *Model) ExitManifestMode() tea.Cmd {
 	m.viewMode = ViewModeNormal
 	m.manifestResource = nil
 
-	// Re-enable mouse when exiting manifest mode
-	return tea.EnableMouseCellMotion
+	// Model.View restores mouse reporting declaratively outside manifest mode.
+	return nil
 }
 
 // RefreshManifestResource refreshes the manifest view with the latest version of the resource

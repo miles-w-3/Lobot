@@ -36,7 +36,7 @@ func NewTreeRegistry() *command.Registry[TreeCmd] {
 	navigation.Add("end", TreeCmdEnd).WithAlternates("G")
 
 	tree := r.NewCommandGroup("Tree Actions")
-	tree.Add("enter", TreeCmdToggle).WithAlternates(" ").WithDescription("toggle expand")
+	tree.Add("enter", TreeCmdToggle).WithAlternates("space").WithDescription("toggle expand")
 	tree.Add("E", TreeCmdExpandAll).WithDescription("expand all")
 	tree.Add("C", TreeCmdCollapseAll).WithDescription("collapse all")
 

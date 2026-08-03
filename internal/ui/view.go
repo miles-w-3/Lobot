@@ -5,45 +5,47 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/miles-w-3/lobot/internal/command"
 )
 
 // View renders the UI
-func (m Model) View() string {
-	var baseView string
+func (m Model) View() tea.View {
+	var content string
 	if m.viewMode == ViewModeSplash {
-		baseView = m.splash.View()
+		content = m.splash.View()
 		if m.splash.IsError() {
-			baseView = m.renderSplashErrorHelp(baseView)
+			content = m.renderSplashErrorHelp(content)
 		}
 	} else if m.viewMode == ViewModeManifest {
-		baseView = m.renderManifestView()
+		content = m.renderManifestView()
 	} else if m.viewMode == ViewModeVisualize {
-		baseView = m.renderVisualizeView()
+		content = m.renderVisualizeView()
 	} else if m.viewMode == ViewModeUtilization {
-		baseView = m.renderUtilizationView()
+		content = m.renderUtilizationView()
 	} else {
-		baseView = m.renderNormalView()
+		content = m.renderNormalView()
 	}
 
-	// If selector is visible, render it as an overlay
 	if m.selector != nil && m.selector.IsVisible() {
-		return m.renderSelectorOverlay(baseView)
+		content = m.renderSelectorOverlay(content)
 	}
-
-	// If modal is visible (including help modal), render it as an overlay
 	if m.modal.IsVisible() {
-		return m.renderModalOverlay(baseView)
+		content = m.renderModalOverlay(content)
 	}
-
-	// If palette is visible, render it as an overlay
 	if m.paletteVisible {
-		return m.renderPaletteOverlay(baseView)
+		content = m.renderPaletteOverlay(content)
 	}
 
-	return baseView
+	view := tea.NewView(content)
+	view.AltScreen = true
+	if m.viewMode == ViewModeManifest {
+		view.MouseMode = tea.MouseModeNone
+	} else {
+		view.MouseMode = tea.MouseModeCellMotion
+	}
+	return view
 }
 
 // renderSplashErrorHelp renders registry-backed recovery shortcuts on the splash error screen.
@@ -192,10 +194,9 @@ func (m Model) renderStatusLine() string {
 		rightParts = append(rightParts, metadataStyle.Render(fmt.Sprintf("updated %s", formatRelativeTime(lastUpdate))))
 	}
 
-	// Add refresh interval - all resources use the same 5-minute resync period
-	// All updates are event-driven via watch API; resync is just a safety net
-	refreshInterval := "resync: 5m"
-	rightParts = append(rightParts, metadataStyle.Render(refreshInterval))
+	// Informers stay current through Kubernetes LIST/WATCH and relist after
+	// disconnects; explicit refresh remains available from the command registry.
+	rightParts = append(rightParts, metadataStyle.Render("watch: live"))
 
 	right := strings.Join(rightParts, " • ")
 
@@ -223,6 +224,9 @@ func (m Model) renderFilterBar() string {
 
 // renderResourceTable renders the table of resources
 func (m Model) renderResourceTable() string {
+	if !m.resourceService.IsResourceReady(m.CurrentResourceType().GVR) {
+		return helpStyle.Render("Loading resources…")
+	}
 	if len(m.filteredResources) == 0 {
 		return helpStyle.Render("No resources found")
 	}
@@ -267,13 +271,13 @@ func (m Model) renderStatusBar() string {
 
 // renderHelp renders the help text using the command registry
 func (m Model) renderHelp() string {
-	separator := command.DefaultHelpStyles.ShortSeparator.Render(" • ")
+	separator := m.globalRegistry.ShortSeparator(" • ")
 
 	// Always show global help first
 	helpView := m.globalRegistry.ShortView()
 
 	// Special handling for visualizer mode to show mode-specific commands
-	if m.viewMode == ViewModeVisualize && m.visualizer != nil {
+	if (m.selector == nil || !m.selector.IsVisible()) && m.viewMode == ViewModeVisualize && m.visualizer != nil {
 		// Show specific mode commands
 		var specificHelp string
 		if m.visualizer.mode == VisualizationModeGraph {

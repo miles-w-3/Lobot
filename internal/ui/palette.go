@@ -5,14 +5,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/keys"
 )
 
-// PaletteBackMsg is sent when the palette should close (esc/q pressed)
+// PaletteBackMsg is sent when the palette should close.
 type PaletteBackMsg struct{}
 
 // PaletteSelectedMsg is sent when a command is selected from the palette
@@ -41,22 +41,36 @@ type PaletteModel struct {
 }
 
 // NewPaletteModel creates a new palette model
-func NewPaletteModel(width, height int) PaletteModel {
-	// Configure text input with primary color cursor
+func NewPaletteModel(width, height int, isDark bool) PaletteModel {
 	ti := textinput.New()
 	ti.Placeholder = ""
 	ti.Focus()
 	ti.Prompt = ""
-	ti.TextStyle = lipgloss.NewStyle().Foreground(ColorText)
-	ti.Cursor.Style = lipgloss.NewStyle().Foreground(ColorPrimary)
-	ti.Width = paletteMaxWidth - 4
+	ti.SetWidth(paletteMaxWidth - 4)
 
-	return PaletteModel{
+	m := PaletteModel{
 		input:    ti,
 		width:    width,
 		height:   height,
 		registry: keys.NewPaletteRegistry(),
 	}
+	m.SetTheme(isDark)
+	return m
+}
+
+// SetTheme applies background-aware text input styles.
+func (m *PaletteModel) SetTheme(isDark bool) {
+	styles := textinput.DefaultStyles(isDark)
+	styles.Focused.Text = lipgloss.NewStyle().Foreground(ColorText)
+	styles.Blurred.Text = lipgloss.NewStyle().Foreground(ColorText)
+	styles.Cursor.Color = ColorPrimary
+	m.input.SetStyles(styles)
+}
+
+// SetSize updates the terminal dimensions used to constrain the palette.
+func (m *PaletteModel) SetSize(width, height int) {
+	m.width = width
+	m.height = height
 }
 
 // SetEntries updates the list of available commands
@@ -168,7 +182,7 @@ func (m PaletteModel) Update(msg tea.Msg) (PaletteModel, tea.Cmd) {
 	logger.Debug("Handling command palette update")
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		logger.Debug("Handling command palette key press", "key", msg.String())
 
 		// Check palette registry for commands
@@ -278,15 +292,19 @@ func (m PaletteModel) View() string {
 
 	var content strings.Builder
 
-	// Header: "Commands" on left, "esc" on right
+	// Header: title on the left and the registry-backed close key on the right.
 	headerLeft := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorText).
 		Render("Commands")
 
+	backKey := ""
+	if entry, ok := m.registry.EntryForCommand(keys.PaletteCmdBack); ok {
+		backKey = entry.Display
+	}
 	headerRight := lipgloss.NewStyle().
 		Foreground(ColorMuted).
-		Render("esc")
+		Render(backKey)
 
 	// Calculate spacing between header elements
 	headerSpace := width - lipgloss.Width(headerLeft) - lipgloss.Width(headerRight) - 4

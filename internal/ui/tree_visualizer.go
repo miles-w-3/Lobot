@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
@@ -54,13 +54,19 @@ func NewTreeVisualizerModel(resourceGraph *graph.ResourceGraph, width, height in
 	treeViewportWidth := treeWidth - 4
 	treeViewportHeight := height - 8 // Account for title, border, help
 
-	treeViewport := viewport.New(treeViewportWidth, treeViewportHeight)
+	treeViewport := viewport.New(
+		viewport.WithWidth(treeViewportWidth),
+		viewport.WithHeight(treeViewportHeight),
+	)
 
 	// Create details viewport (account for border + padding = 4 total)
 	detailsViewportWidth := detailsWidth - 4
 	detailsViewportHeight := height - 8
 
-	detailsViewport := viewport.New(detailsViewportWidth, detailsViewportHeight)
+	detailsViewport := viewport.New(
+		viewport.WithWidth(detailsViewportWidth),
+		viewport.WithHeight(detailsViewportHeight),
+	)
 
 	model := TreeVisualizerModel{
 		viewport:        treeViewport,
@@ -202,11 +208,6 @@ func (m *TreeVisualizerModel) renderTreeLine(node *treeNode, selected bool) stri
 	// Add namespace label if needed
 	nameWithNamespace := addNamespaceLabel(node.graphNode, m.rootResource, name)
 
-	// Check if missing resource
-	if node.graphNode.Metadata["missing"] == "true" {
-		nameWithNamespace = "[Missing] " + nameWithNamespace
-	}
-
 	// Add root indicator
 	if node.graphNode.IsRoot {
 		nameWithNamespace = nameWithNamespace + " ●"
@@ -219,7 +220,7 @@ func (m *TreeVisualizerModel) renderTreeLine(node *treeNode, selected bool) stri
 		return lipgloss.NewStyle().
 			Background(ColorSecondary).
 			Foreground(lipgloss.Color("#FFFFFF")).
-			Width(m.viewport.Width).
+			Width(m.viewport.Width()).
 			Render(line)
 	}
 
@@ -294,7 +295,7 @@ func (m TreeVisualizerModel) Update(msg tea.Msg) (TreeVisualizerModel, tea.Cmd) 
 	var cmd tea.Cmd
 
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if dispatchedCmd, err := m.registry.Dispatch(msg); err == nil {
 			switch dispatchedCmd {
 			case keys.TreeCmdFocusLeft:
@@ -417,8 +418,8 @@ func (m *TreeVisualizerModel) pageDown() {
 
 func (m *TreeVisualizerModel) ensureSelectedVisible() {
 	// Calculate the viewport's visible range
-	viewportHeight := m.viewport.Height
-	currentYOffset := m.viewport.YOffset
+	viewportHeight := m.viewport.Height()
+	currentYOffset := m.viewport.YOffset()
 
 	// If selected is above viewport, scroll up
 	if m.selectedIndex < currentYOffset {
@@ -504,10 +505,14 @@ func (m *TreeVisualizerModel) View() string {
 
 // renderTreeView renders the tree visualization panel
 func (m *TreeVisualizerModel) renderTreeView() string {
+	switchKey := ""
+	if entry, ok := m.registry.EntryForCommand(keys.TreeCmdSwitchToGraph); ok {
+		switchKey = entry.Display
+	}
 	title := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(ColorPrimary).
-		Render("▶ Resource Tree (G: graph view)")
+		Render(fmt.Sprintf("▶ Resource Tree (%s: graph view)", switchKey))
 
 	// Calculate tree panel width
 	var treeWidth int
