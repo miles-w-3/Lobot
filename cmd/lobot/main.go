@@ -11,7 +11,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/miles-w-3/lobot/internal/k8s"
-	"github.com/miles-w-3/lobot/internal/ui"
+	"github.com/miles-w-3/lobot/internal/logging"
+	"github.com/miles-w-3/lobot/internal/modes"
 	"k8s.io/klog/v2"
 )
 
@@ -55,17 +56,16 @@ func run() error {
 		cancel()
 	}()
 
-	// Create error tracker for logging errors to error.log
-	errorTracker, err := ui.NewErrorTracker()
+	// Capture client-library output in error.log without coupling it to the UI.
+	klogWriter, err := logging.NewKlogWriter("error.log")
 	if err != nil {
-		return fmt.Errorf("failed to create error tracker: %w", err)
+		return err
 	}
-	defer errorTracker.Close()
+	defer klogWriter.Close()
 
-	// Redirect klog (client-go) output to our error tracker
-	// We must also disable logging to stderr which klog does by default
-	// This prevents "Throttling request" messages from breaking the TUI
-	klog.SetOutput(errorTracker)
+	// Redirect klog (client-go) output to the file writer.
+	// We must also disable logging to stderr, which klog does by default.
+	klog.SetOutput(klogWriter)
 
 	// Configure klog flags to avoid writing to stderr
 	// We need to use the flag package to set these as klog uses flags
@@ -93,8 +93,8 @@ func run() error {
 	}
 	defer resourceService.Close()
 
-	// Create UI model
-	model := ui.NewModel(resourceService, logger, errorTracker)
+	// Create the Bubble Tea root model.
+	model := modes.NewRootModel(resourceService, logger)
 
 	// Create Bubbletea program
 	p := tea.NewProgram(model)
@@ -103,14 +103,14 @@ func run() error {
 	processUpdateCallback := func(update k8s.ServiceUpdate) {
 		switch update.Type {
 		case k8s.ServiceUpdateResources:
-			p.Send(ui.ResourceUpdateMsg{})
+			p.Send(modes.ResourceUpdateMsg{})
 		case k8s.ServiceUpdateReady:
 			logger.Info("System ready", "context", update.Context)
-			p.Send(ui.ReadyMsg{})
+			p.Send(modes.SplashServiceReadyMsg{})
 		case k8s.ServiceUpdateError:
 			logger.Error("Resource service error", "error", update.Error)
-			// Send error to UI instead of just logging
-			p.Send(ui.ErrorMsg{Error: update.Error})
+			// Send error to the active screen instead of only logging it.
+			p.Send(modes.ErrorMsg{Error: update.Error})
 		}
 	}
 

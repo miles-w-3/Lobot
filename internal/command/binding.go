@@ -29,12 +29,3 @@ func (b *CommandBinding[T]) WithSearchTerms(terms ...string) *CommandBinding[T] 
 	b.Searchable = terms
 	return b
 }
-
-func (b *CommandBinding[T]) ExportKeyBindings() map[string]T {
-	bindings := make(map[string]T)
-	bindings[b.Key] = b.Command
-	for _, alt := range b.AltKeys {
-		bindings[alt] = b.Command
-	}
-	return bindings
-}

@@ -1,3 +1,5 @@
+//go:build legacyui
+
 package ui
 
 import (

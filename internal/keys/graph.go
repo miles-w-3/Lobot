@@ -51,7 +51,7 @@ func NewGraphRegistry() *command.Registry[GraphCmd] {
 	switchMode.Add("V", GraphCmdSwitchToTree).WithDescription("switch to tree view")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit graph")
-	exit.Add("esc", GraphCmdBack).WithAlternates("q")
+	exit.Add("esc", GraphCmdBack)
 
 	r.Build()
 

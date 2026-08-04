@@ -29,7 +29,7 @@ func NewManifestRegistry() *command.Registry[ManifestCmd] {
 	actions.Add("ctrl+y", ManifestCmdCopy).WithDescription("copy document")
 	actions.Add("pgup", ManifestCmdPageUp).WithDescription("page up")
 	actions.Add("pgdown", ManifestCmdPageDown).WithDescription("page down")
-	actions.Add("esc", ManifestCmdBack).WithAlternates("q").WithDescription("back")
+	actions.Add("esc", ManifestCmdBack).WithDescription("back")
 
 	r.Build()
 

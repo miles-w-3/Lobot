@@ -1,6 +1,4 @@
-//go:build legacyui
-
-package ui
+package modes
 
 import (
 	"log/slog"
@@ -12,17 +10,10 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/miles-w-3/lobot/internal/command"
 	"github.com/miles-w-3/lobot/internal/keys"
+	"github.com/miles-w-3/lobot/internal/util"
 )
 
-// PaletteBackMsg is sent when the palette should close.
-type PaletteBackMsg struct{}
-
-// PaletteSelectedMsg is sent when a command is selected from the palette
-type PaletteSelectedMsg struct {
-	Entry command.PaletteEntry
-}
-
-// Constants for palette dimensions
+// Constants for palette dimensions - improve in future
 const (
 	paletteMaxWidth  = 80
 	paletteMaxHeight = 22
@@ -63,9 +54,9 @@ func NewPaletteModel(width, height int, isDark bool) PaletteModel {
 // SetTheme applies background-aware text input styles.
 func (m *PaletteModel) SetTheme(isDark bool) {
 	styles := textinput.DefaultStyles(isDark)
-	styles.Focused.Text = lipgloss.NewStyle().Foreground(ColorText)
-	styles.Blurred.Text = lipgloss.NewStyle().Foreground(ColorText)
-	styles.Cursor.Color = ColorPrimary
+	styles.Focused.Text = lipgloss.NewStyle().Foreground(util.ColorText)
+	styles.Blurred.Text = lipgloss.NewStyle().Foreground(util.ColorText)
+	styles.Cursor.Color = util.ColorPrimary
 	m.input.SetStyles(styles)
 }
 
@@ -287,7 +278,7 @@ func (m PaletteModel) View() string {
 	// Main container style with border
 	containerStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
-		BorderForeground(ColorPrimary).
+		BorderForeground(util.ColorPrimary).
 		Width(width).
 		Height(height).
 		Padding(0, 1)
@@ -297,7 +288,7 @@ func (m PaletteModel) View() string {
 	// Header: title on the left and the registry-backed close key on the right.
 	headerLeft := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(ColorText).
+		Foreground(util.ColorText).
 		Render("Commands")
 
 	backKey := ""
@@ -305,7 +296,7 @@ func (m PaletteModel) View() string {
 		backKey = entry.Display
 	}
 	headerRight := lipgloss.NewStyle().
-		Foreground(ColorMuted).
+		Foreground(util.ColorMuted).
 		Render(backKey)
 
 	// Calculate spacing between header elements
@@ -332,7 +323,7 @@ func (m PaletteModel) View() string {
 	// Render the list of commands
 	if len(m.filteredEntries) == 0 {
 		noResults := lipgloss.NewStyle().
-			Foreground(ColorMuted).
+			Foreground(util.ColorMuted).
 			Render("No matching commands")
 		content.WriteString(noResults)
 	} else {
@@ -347,19 +338,19 @@ func (m *PaletteModel) renderCommandList(content *strings.Builder, width, height
 	// Styles
 	groupStyle := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(ColorSecondary)
+		Foreground(util.ColorSecondary)
 
 	selectedRowStyle := lipgloss.NewStyle().
-		Background(ColorPrimary).
+		Background(util.ColorPrimary).
 		Foreground(lipgloss.Color("#000000")).
 		Bold(true).
 		Width(width)
 
 	normalStyle := lipgloss.NewStyle().
-		Foreground(ColorText)
+		Foreground(util.ColorText)
 
 	keyStyle := lipgloss.NewStyle().
-		Foreground(ColorMuted)
+		Foreground(util.ColorMuted)
 
 	// Build list with group headers
 	type listItem struct {

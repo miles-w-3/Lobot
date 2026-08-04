@@ -1,3 +1,5 @@
+//go:build legacyui
+
 package splash
 
 import (
@@ -21,7 +23,7 @@ const (
 
 type TickMsg struct{}
 
-type Model struct {
+type SplashScreen struct {
 	sprite       [][]rune
 	width        int
 	height       int
@@ -34,7 +36,7 @@ type Model struct {
 	logger       *slog.Logger
 }
 
-func NewModel(logger *slog.Logger) Model {
+func NewModel(logger *slog.Logger) *SplashScreen {
 	sprite := []string{
 		"           GGGGGGGGGGG           ",
 		"           G         G           ",
@@ -54,7 +56,7 @@ func NewModel(logger *slog.Logger) Model {
 		grid[i] = []rune(line)
 	}
 
-	return Model{
+	return &SplashScreen{
 		sprite: grid,
 		width:  len(grid[0]),
 		height: len(grid),
@@ -63,7 +65,7 @@ func NewModel(logger *slog.Logger) Model {
 	}
 }
 
-func (m Model) Init() tea.Cmd {
+func (s SplashScreen) Init() tea.Cmd {
 	return tick()
 }
 
@@ -75,17 +77,17 @@ func longTick() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(time.Time) tea.Msg { return TickMsg{} })
 }
 
-func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+func (s *SplashScreen) Update(msg tea.Msg) (SplashScreen, tea.Cmd) {
 	switch msg.(type) {
 	case TickMsg:
-		switch m.phase {
+		switch s.phase {
 		case PhaseDrawing:
-			m.step++
+			s.step++
 			// Draw bottom to top (step goes from 0 to height)
-			if m.step >= m.height {
-				m.phase = PhaseShowingX
+			if s.step >= s.height {
+				s.phase = PhaseShowingX
 			}
-			return m, tick()
+			return s, tick()
 		case PhaseShowingX:
 			// Reset step for clearing phase
 			m.step = m.height
@@ -151,16 +153,16 @@ func (m *Model) MarkError(err error) {
 }
 
 // IsError returns true if splash is in error state
-func (m Model) IsError() bool {
+func (s SplashScreen) IsError() bool {
 	return m.phase == PhaseError
 }
 
 // IsDone returns true if the splash is complete
-func (m Model) IsDone() bool {
+func (s SplashScreen) IsDone() bool {
 	return m.phase == PhaseDone
 }
 
-func (m Model) View() string {
+func (s SplashScreen) View() string {
 	green := lipgloss.NewStyle().Foreground(lipgloss.Color("#06bf88"))
 	gray := lipgloss.NewStyle().Foreground(lipgloss.Color("#929296"))
 
@@ -242,7 +244,7 @@ func (m *Model) SetSize(width, height int) {
 }
 
 // Show G pixels from bottom to top
-func shouldShowG(m Model, x, y int) bool {
+func shouldShowG(s SplashScreen, x, y int) bool {
 	switch m.phase {
 	case PhaseDrawing:
 		// Draw from bottom to top: reveal rows from bottom (higher y) to top (lower y)
@@ -260,7 +262,7 @@ func shouldShowG(m Model, x, y int) bool {
 }
 
 // Show X pixels only after all Gs are drawn, and hide them during clear
-func shouldShowX(m Model, x, y int) bool {
+func shouldShowX(s SplashScreen, x, y int) bool {
 	switch m.phase {
 	case PhaseShowingX:
 		return true
