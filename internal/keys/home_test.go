@@ -14,6 +14,11 @@ func TestHomeRegistryDispatchesHomeCommands(t *testing.T) {
 		{key: "left", want: HomeCmdPrevType},
 		{key: "h", want: HomeCmdPrevType},
 		{key: "/", want: HomeCmdFilter},
+		{key: "enter", want: HomeCmdOpenManifest},
+		{key: "E", want: HomeCmdEdit},
+		{key: "ctrl+n", want: HomeCmdOpenNamespaceSelector},
+		{key: "ctrl+t", want: HomeCmdOpenResourceTypeSelector},
+		{key: "ctrl+k", want: HomeCmdOpenContextSelector},
 		{key: "tab", want: HomeCmdToggleFavorites},
 	}
 

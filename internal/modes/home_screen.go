@@ -1,8 +1,10 @@
 package modes
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,6 +48,11 @@ type HomeScreen struct {
 
 	namespaceFilter *filters.NamespaceFilter
 	nameFilter      *filters.ResourceNameFilter
+
+	selector              *SelectorModel
+	selectorLoading       bool
+	selectorRequestID     uint64
+	selectorResourceTypes map[string]*k8s.TrackedType
 
 	selectedIndex int
 	width         int
@@ -108,7 +115,22 @@ func newHomeTable() table.Model {
 // View renders only the home content. The root owns the shared help bar and
 // terminal view settings.
 func (s *HomeScreen) View() string {
-	return s.render()
+	content := s.render()
+	if s.width <= 0 || s.height <= 0 {
+		return content
+	}
+	if s.selector != nil {
+		return overlayCenter(content, s.selector.View(), s.width, s.height)
+	}
+	if s.selectorLoading {
+		loading := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(util.ColorAccent).
+			Padding(1, 2).
+			Render("Loading choices…")
+		return overlayCenter(content, loading, s.width, s.height)
+	}
+	return content
 }
 
 // Update handles home messages. Key presses are dispatched through the home
@@ -118,9 +140,28 @@ func (s *HomeScreen) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		s.updateSize(msg)
+		if s.selector != nil {
+			_, cmd := s.selector.Update(msg)
+			return cmd
+		}
 		return nil
 	case ResourceUpdateMsg:
 		s.updateResources()
+		return nil
+	case HomeActivatedMsg:
+		s.selector = nil
+		s.selectorLoading = false
+		s.selectorResourceTypes = nil
+		s.updateResources()
+		return nil
+	case NamespaceOptionsReadyMsg:
+		return s.openNamespaceSelector(msg)
+	case ContextOptionsReadyMsg:
+		return s.openContextSelector(msg)
+	case ResourceTypeOptionsReadyMsg:
+		return s.openResourceTypeSelector(msg)
+	case ContextSwitchStartedMsg:
+		s.resetForContext()
 		return nil
 	case tea.KeyPressMsg:
 		return s.updateKey(msg)
@@ -130,6 +171,13 @@ func (s *HomeScreen) Update(msg tea.Msg) tea.Cmd {
 		return s.updateMouseClick(msg)
 	}
 
+	if s.selector != nil {
+		_, cmd := s.selector.Update(msg)
+		return cmd
+	}
+	if s.selectorLoading {
+		return nil
+	}
 	if s.filtering {
 		var cmd tea.Cmd
 		s.filterInput, cmd = s.filterInput.Update(msg)
@@ -140,6 +188,16 @@ func (s *HomeScreen) Update(msg tea.Msg) tea.Cmd {
 }
 
 func (s *HomeScreen) updateKey(msg tea.KeyPressMsg) tea.Cmd {
+	if s.selector != nil {
+		result, cmd := s.selector.Update(msg)
+		if result == nil {
+			return cmd
+		}
+		return tea.Batch(cmd, s.finishSelector(*result))
+	}
+	if s.selectorLoading {
+		return nil
+	}
 	if s.filtering {
 		if cmd, err := s.filterRegistry.Dispatch(msg); err == nil {
 			return s.dispatchFilterCommand(cmd)
@@ -161,6 +219,9 @@ func (s *HomeScreen) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 }
 
 func (s *HomeScreen) updateMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
+	if s.selector != nil || s.selectorLoading {
+		return nil
+	}
 	switch msg.Button {
 	case tea.MouseWheelUp:
 		s.moveSelection(-1)
@@ -171,7 +232,7 @@ func (s *HomeScreen) updateMouseWheel(msg tea.MouseWheelMsg) tea.Cmd {
 }
 
 func (s *HomeScreen) updateMouseClick(msg tea.MouseClickMsg) tea.Cmd {
-	if msg.Button != tea.MouseLeft || len(s.filteredResources) == 0 {
+	if s.selector != nil || s.selectorLoading || msg.Button != tea.MouseLeft || len(s.filteredResources) == 0 {
 		return nil
 	}
 
@@ -212,8 +273,22 @@ func (s *HomeScreen) dispatchCommand(cmd keys.HomeCmd) tea.Cmd {
 		s.nextResourceType(-1)
 	case keys.HomeCmdFilter:
 		s.enterFilter()
+	case keys.HomeCmdOpenManifest:
+		return s.openManifest()
+	case keys.HomeCmdEdit:
+		return s.editSelectedResource()
 	case keys.HomeCmdRefresh:
 		return s.refreshCurrentType()
+	case keys.HomeCmdVisualize:
+		return s.visualizeSelected()
+	case keys.HomeCmdOpenUtilization:
+		return func() tea.Msg { return UtilizationRequestedMsg{} }
+	case keys.HomeCmdOpenNamespaceSelector:
+		return s.requestNamespaceSelector()
+	case keys.HomeCmdOpenResourceTypeSelector:
+		return s.requestResourceTypeSelector()
+	case keys.HomeCmdOpenContextSelector:
+		return s.requestContextSelector()
 	case keys.HomeCmdToggleFavorites:
 		s.showingFavoriteTypes = !s.showingFavoriteTypes
 		s.layoutComponents()
@@ -262,6 +337,274 @@ func (s *HomeScreen) applyNameFilter(pattern string) bool {
 	s.filterError = nil
 	s.updateResources()
 	return true
+}
+
+func (s *HomeScreen) selectedResource() k8s.TrackedObject {
+	if s.selectedIndex < 0 || s.selectedIndex >= len(s.filteredResources) {
+		return nil
+	}
+	return s.filteredResources[s.selectedIndex]
+}
+
+func (s *HomeScreen) openManifest() tea.Cmd {
+	resource := s.selectedResource()
+	if resource == nil || resource.GetRaw() == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return ManifestRequestedMsg{Resource: resource}
+	}
+}
+
+func (s *HomeScreen) editSelectedResource() tea.Cmd {
+	resource := s.selectedResource()
+	if resource == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return ManifestEditRequestedMsg{Resource: resource}
+	}
+}
+
+func (s *HomeScreen) visualizeSelected() tea.Cmd {
+	resource := s.selectedResource()
+	if resource == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		return VisualizerRequestedMsg{Resource: resource}
+	}
+}
+
+func (s *HomeScreen) requestNamespaceSelector() tea.Cmd {
+	if s.selector != nil || s.selectorLoading {
+		return nil
+	}
+
+	s.selectorLoading = true
+	s.selectorRequestID++
+	requestID := s.selectorRequestID
+	fallback := s.namespaceOptionsFromResources()
+	current := s.namespaceFilter.GetPattern()
+	service := s.resourceService
+	return func() tea.Msg {
+		options := fallback
+		if service != nil {
+			if namespaces, err := service.GetAllNamespaces(context.Background()); err == nil && len(namespaces) > 0 {
+				options = namespaces
+			}
+		}
+		return NamespaceOptionsReadyMsg{RequestID: requestID, Options: options, Current: current}
+	}
+}
+
+func (s *HomeScreen) requestContextSelector() tea.Cmd {
+	if s.selector != nil || s.selectorLoading {
+		return nil
+	}
+
+	s.selectorLoading = true
+	s.selectorRequestID++
+	requestID := s.selectorRequestID
+	service := s.resourceService
+	fallback := []string{"default"}
+	current := "default"
+	if service != nil && service.GetClient() != nil {
+		if name := service.GetCurrentContext(); name != "" {
+			current = name
+			fallback = []string{name}
+		}
+	}
+	return func() tea.Msg {
+		options := fallback
+		if service != nil {
+			if contexts, selected, err := service.GetAvailableContexts(); err == nil && len(contexts) > 0 {
+				options = contexts
+				if selected != "" {
+					current = selected
+				}
+			}
+		}
+		return ContextOptionsReadyMsg{RequestID: requestID, Options: options, Current: current}
+	}
+}
+
+func (s *HomeScreen) requestResourceTypeSelector() tea.Cmd {
+	if s.selector != nil || s.selectorLoading {
+		return nil
+	}
+
+	s.selectorLoading = true
+	s.selectorRequestID++
+	requestID := s.selectorRequestID
+	service := s.resourceService
+	return func() tea.Msg {
+		if service == nil {
+			return ResourceTypeOptionsReadyMsg{RequestID: requestID, Types: k8s.DefaultResourceTypes()}
+		}
+		types, err := service.GetAllResourceTypes()
+		if err != nil {
+			return ResourceTypeOptionsReadyMsg{RequestID: requestID, Types: k8s.DefaultResourceTypes(), Error: err}
+		}
+		return ResourceTypeOptionsReadyMsg{RequestID: requestID, Types: types}
+	}
+}
+
+func (s *HomeScreen) openNamespaceSelector(msg NamespaceOptionsReadyMsg) tea.Cmd {
+	if !s.selectorLoading || msg.RequestID != s.selectorRequestID {
+		return nil
+	}
+	s.selectorLoading = false
+	options := []SelectorOption{{Label: "<all>", Value: "<all>"}}
+	for _, namespace := range sortedStrings(msg.Options) {
+		if namespace == "" || namespace == "<all>" {
+			continue
+		}
+		options = append(options, SelectorOption{Label: namespace, Value: namespace})
+	}
+	current := msg.Current
+	if current == "" {
+		current = "<all>"
+	}
+	s.selector = NewSelectorModel(SelectorKindNamespace, "Select Namespace", options, current)
+	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
+	return nil
+}
+
+func (s *HomeScreen) openContextSelector(msg ContextOptionsReadyMsg) tea.Cmd {
+	if !s.selectorLoading || msg.RequestID != s.selectorRequestID {
+		return nil
+	}
+	s.selectorLoading = false
+	options := make([]SelectorOption, 0, len(msg.Options))
+	for _, contextName := range sortedStrings(msg.Options) {
+		if contextName == "" {
+			continue
+		}
+		options = append(options, SelectorOption{Label: contextName, Value: contextName})
+	}
+	s.selector = NewSelectorModel(SelectorKindContext, "Select Cluster Context", options, msg.Current)
+	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
+	return nil
+}
+
+func (s *HomeScreen) openResourceTypeSelector(msg ResourceTypeOptionsReadyMsg) tea.Cmd {
+	if !s.selectorLoading || msg.RequestID != s.selectorRequestID {
+		return nil
+	}
+	s.selectorLoading = false
+	if msg.Error != nil {
+		s.log.Warn("resource type discovery failed; using defaults", "error", msg.Error)
+	}
+
+	s.selectorResourceTypes = make(map[string]*k8s.TrackedType, len(msg.Types))
+	options := make([]SelectorOption, 0, len(msg.Types))
+	for _, resourceType := range msg.Types {
+		if resourceType == nil || resourceType.DisplayName == "" {
+			continue
+		}
+		s.selectorResourceTypes[resourceType.DisplayName] = resourceType
+		options = append(options, SelectorOption{
+			Label: resourceType.DisplayName,
+			Value: resourceType.DisplayName,
+		})
+	}
+	s.selector = NewSelectorModel(SelectorKindResourceType, "Select Resource Type", options, s.currentResourceType().DisplayName)
+	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
+	return nil
+}
+
+func (s *HomeScreen) finishSelector(result SelectorResult) tea.Cmd {
+	resourceTypes := s.selectorResourceTypes
+	s.selector = nil
+	s.selectorResourceTypes = nil
+	if result.Cancelled || !result.Accepted {
+		return nil
+	}
+
+	switch result.Kind {
+	case SelectorKindNamespace:
+		if result.Value == "<all>" {
+			_ = s.namespaceFilter.SetPattern("")
+		} else {
+			_ = s.namespaceFilter.SetPattern(result.Value)
+		}
+		s.updateResources()
+	case SelectorKindContext:
+		return func() tea.Msg {
+			return ContextSwitchRequestedMsg{ContextName: result.Value}
+		}
+	case SelectorKindResourceType:
+		return s.selectResourceType(resourceTypes[result.Value])
+	}
+	return nil
+}
+
+func (s *HomeScreen) selectResourceType(resourceType *k8s.TrackedType) tea.Cmd {
+	if resourceType == nil {
+		return nil
+	}
+
+	for index, trackedType := range s.trackedTypes {
+		if trackedType.GVR == resourceType.GVR {
+			s.currentType = index
+			s.selectedIndex = 0
+			s.updateResources()
+			return nil
+		}
+	}
+
+	s.trackedTypes = append(s.trackedTypes, resourceType)
+	s.currentType = len(s.trackedTypes) - 1
+	s.selectedIndex = 0
+	s.updateResources()
+	if s.resourceService == nil {
+		return nil
+	}
+
+	service := s.resourceService
+	return func() tea.Msg {
+		if err := service.StartInformer(resourceType); err != nil {
+			return ErrorMsg{Error: err}
+		}
+		return ResourceUpdateMsg{}
+	}
+}
+
+func (s *HomeScreen) resetForContext() {
+	s.selector = nil
+	s.selectorLoading = false
+	s.selectorResourceTypes = nil
+	s.filtering = false
+	s.filterInput.Blur()
+	_ = s.namespaceFilter.SetPattern("")
+	_ = s.nameFilter.SetPattern("")
+	s.filterError = nil
+	s.trackedTypes = k8s.DefaultResourceTypes()
+	s.currentType = 0
+	s.selectedIndex = 0
+	s.table.SetRows(nil)
+	s.updateResources()
+}
+
+func (s *HomeScreen) namespaceOptionsFromResources() []string {
+	seen := make(map[string]struct{})
+	for _, resource := range s.resources {
+		if resource != nil && resource.GetNamespace() != "" {
+			seen[resource.GetNamespace()] = struct{}{}
+		}
+	}
+	options := make([]string, 0, len(seen))
+	for namespace := range seen {
+		options = append(options, namespace)
+	}
+	return options
+}
+
+func sortedStrings(values []string) []string {
+	copyValues := append([]string(nil), values...)
+	sort.Strings(copyValues)
+	return copyValues
 }
 
 func (s *HomeScreen) refreshCurrentType() tea.Cmd {
@@ -436,6 +779,9 @@ func (s *HomeScreen) layoutComponents() {
 // CommandPresentation exposes the registry for the currently active Home
 // submode. It contains metadata only; HomeScreen still dispatches commands.
 func (s *HomeScreen) CommandPresentation() command.Presentation {
+	if s.selector != nil {
+		return s.selector.Presentation()
+	}
 	if s.filtering {
 		return s.filterRegistry.Presentation()
 	}

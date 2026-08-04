@@ -8,6 +8,9 @@ type ScreenID uint8
 const (
 	ScreenSplash ScreenID = iota
 	ScreenHome
+	ScreenVisualizer
+	ScreenUtilization
+	ScreenManifest
 )
 
 // NavigateMsg requests a screen transition. The root owns construction and

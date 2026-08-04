@@ -17,6 +17,13 @@ const (
 	HomeCmdPrevType
 	HomeCmdFilter
 	HomeCmdRefresh
+	HomeCmdOpenManifest
+	HomeCmdEdit
+	HomeCmdVisualize
+	HomeCmdOpenUtilization
+	HomeCmdOpenNamespaceSelector
+	HomeCmdOpenResourceTypeSelector
+	HomeCmdOpenContextSelector
 	HomeCmdToggleFavorites
 )
 
@@ -34,10 +41,19 @@ func addHomeCommands(r *command.Registry[HomeCmd]) *command.CommandGroup[HomeCmd
 	typeNav.Add("left", HomeCmdPrevType).WithAlternates("h")
 
 	actions := r.NewCommandGroup("Resource Actions")
+	actions.Add("enter", HomeCmdOpenManifest).WithDescription("open manifest")
+	actions.Add("E", HomeCmdEdit).WithDescription("edit")
 	actions.Add("R", HomeCmdRefresh).WithDescription("refresh")
+	actions.Add("V", HomeCmdVisualize).WithDescription("visualize")
 
 	filters := r.NewCommandGroup("Filters")
 	filters.Add("/", HomeCmdFilter).WithDescription("resource names")
+	filters.Add("ctrl+n", HomeCmdOpenNamespaceSelector).WithDescription("namespace selector")
+	filters.Add("ctrl+t", HomeCmdOpenResourceTypeSelector).WithDescription("resource type selector")
+	filters.Add("ctrl+k", HomeCmdOpenContextSelector).WithDescription("context selector")
+
+	mode := r.NewCommandGroup("Mode")
+	mode.Add("ctrl+u", HomeCmdOpenUtilization).WithDescription("utilization dashboard")
 
 	return actions
 }

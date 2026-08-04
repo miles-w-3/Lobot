@@ -1,6 +1,8 @@
 package modes
 
 import (
+	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -8,6 +10,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/miles-w-3/lobot/internal/command"
+	"github.com/miles-w-3/lobot/internal/graph"
 	"github.com/miles-w-3/lobot/internal/k8s"
 	"github.com/miles-w-3/lobot/internal/keys"
 	"github.com/miles-w-3/lobot/internal/util"
@@ -32,7 +35,9 @@ type RootModel struct {
 	height int
 	isDark bool
 
-	globalRegistry *command.Registry[keys.GlobalCmd]
+	globalRegistry  *command.Registry[keys.GlobalCmd]
+	resourceService *k8s.ResourceService
+	graphBuilder    *graph.Builder
 }
 
 func NewRootModel(resourceService *k8s.ResourceService, log *slog.Logger) *RootModel {
@@ -42,21 +47,40 @@ func NewRootModel(resourceService *k8s.ResourceService, log *slog.Logger) *RootM
 
 	palette := NewPaletteModel(0, 0, true)
 	root := &RootModel{
-		log:            log.With("component", "root"),
-		commandPalette: &palette,
-		modal:          NewModalModel(),
-		globalRegistry: keys.NewGlobalRegistry(),
-		isDark:         true,
-		// Keep screen construction in one place. Screens request transitions;
-		// RootModel owns the destination lifecycle and initial commands.
-		screenFactories: map[ScreenID]func() (Screen, tea.Cmd){
-			ScreenSplash: func() (Screen, tea.Cmd) {
-				screen := NewSplashScreen(log)
-				return screen, screen.start()
-			},
-			ScreenHome: func() (Screen, tea.Cmd) {
+		log:             log.With("component", "root"),
+		commandPalette:  &palette,
+		modal:           NewModalModel(),
+		globalRegistry:  keys.NewGlobalRegistry(),
+		resourceService: resourceService,
+		graphBuilder:    graph.NewBuilder(resourceService, log),
+		isDark:          true,
+	}
+
+	// Keep screen construction in one place. Screens request transitions;
+	// RootModel owns the destination lifecycle and initial commands. Home is
+	// the one persistent screen: its factory keeps the instance private while
+	// returning a refresh command whenever we navigate back to it.
+	root.screenFactories = map[ScreenID]func() (Screen, tea.Cmd){
+		ScreenSplash: func() (Screen, tea.Cmd) {
+			screen := NewSplashScreen(log)
+			return screen, screen.start()
+		},
+		ScreenHome: memoizedScreenFactory(
+			func() (Screen, tea.Cmd) {
 				return NewHomeScreen(resourceService, log), nil
 			},
+			func() tea.Cmd {
+				return func() tea.Msg { return HomeActivatedMsg{} }
+			},
+		),
+		ScreenVisualizer: func() (Screen, tea.Cmd) {
+			return NewVisualizerScreen(nil, log), nil
+		},
+		ScreenUtilization: func() (Screen, tea.Cmd) {
+			return newLoadingUtilizationScreen(0, 0), nil
+		},
+		ScreenManifest: func() (Screen, tea.Cmd) {
+			return NewManifestScreen(), nil
 		},
 	}
 
@@ -65,6 +89,28 @@ func NewRootModel(resourceService *k8s.ResourceService, log *slog.Logger) *RootM
 	root.currentID = ScreenSplash
 	root.initialCmd = initialCmd
 	return root
+}
+
+// memoizedScreenFactory keeps persistence local to the factory entry. It is
+// intentionally opt-in: transient screens continue to use ordinary factories
+// and are eligible for collection as soon as RootModel replaces them.
+func memoizedScreenFactory(
+	create func() (Screen, tea.Cmd),
+	onActivate func() tea.Cmd,
+) func() (Screen, tea.Cmd) {
+	var screen Screen
+	var initialized bool
+
+	return func() (Screen, tea.Cmd) {
+		if !initialized {
+			created, initialCmd := create()
+			screen = created
+			initialized = true
+			return screen, tea.Batch(initialCmd, onActivate())
+		}
+
+		return screen, onActivate()
+	}
 }
 
 func (r *RootModel) Init() tea.Cmd {
@@ -86,6 +132,37 @@ func (r *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if globalCmd, err := r.globalRegistry.Dispatch(key); err == nil {
 			return r.handleGlobalCommand(globalCmd)
 		}
+	}
+
+	// Application requests/results are messages rather than key events. Route
+	// them before overlays so an async result cannot be consumed by the palette
+	// or a modal and silently disappear.
+	switch msg := msg.(type) {
+	case UtilizationRequestedMsg:
+		return r, r.handleUtilizationRequest()
+	case UtilizationReadyMsg:
+		return r, r.handleUtilizationReady(msg)
+	case ContextSwitchRequestedMsg:
+		return r, r.handleContextSwitch(msg)
+	case ManifestRequestedMsg:
+		return r, r.handleManifestRequest(msg)
+	case ManifestEditRequestedMsg:
+		return r, r.startManifestEdit(msg)
+	case ManifestCopyRequestedMsg:
+		return r, r.copyManifest(msg)
+	case ManifestEditFinishedMsg:
+		return r, r.handleManifestEditFinished(msg)
+	case VisualizerRequestedMsg:
+		return r, r.buildVisualizer(msg.Resource)
+	case VisualizerReadyMsg:
+		if msg.Graph == nil {
+			r.showModal("Visualizer Error", "Unable to build a resource graph")
+			return r, nil
+		}
+		activationCmd := r.activateScreen(ScreenVisualizer)
+		return r, tea.Batch(activationCmd, r.updateCurrentScreen(msg))
+	case NamespaceOptionsReadyMsg, ContextOptionsReadyMsg, ResourceTypeOptionsReadyMsg:
+		return r, r.updateCurrentScreen(msg)
 	}
 
 	if r.commandPaletteVisible {
@@ -117,6 +194,86 @@ func (r *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return r, r.updateCurrentScreen(msg)
+}
+
+func (r *RootModel) buildVisualizer(resource k8s.TrackedObject) tea.Cmd {
+	if resource == nil || r.graphBuilder == nil {
+		return func() tea.Msg {
+			return ErrorMsg{Error: fmt.Errorf("cannot visualize an empty resource")}
+		}
+	}
+
+	builder := r.graphBuilder
+	return func() tea.Msg {
+		return VisualizerReadyMsg{Graph: builder.BuildGraph(resource)}
+	}
+}
+
+func (r *RootModel) handleUtilizationRequest() tea.Cmd {
+	if r.currentID != ScreenUtilization {
+		r.commandPaletteVisible = false
+		r.modal.Hide()
+		return tea.Batch(r.activateScreen(ScreenUtilization), r.fetchUtilization())
+	}
+
+	return r.fetchUtilization()
+}
+
+func (r *RootModel) handleUtilizationReady(msg UtilizationReadyMsg) tea.Cmd {
+	if r.currentID != ScreenUtilization {
+		return nil
+	}
+
+	cmd := r.updateCurrentScreen(msg)
+	if msg.Error != nil {
+		if msg.Unavailable {
+			r.showModal("Metrics Unavailable",
+				"The Kubernetes metrics API is not available.\n\n"+
+					"Please ensure metrics-server is installed and running:\n"+
+					"kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml")
+		} else {
+			r.showModal("Metrics Error", "Failed to fetch metrics: "+msg.Error.Error())
+		}
+	}
+	return cmd
+}
+
+func (r *RootModel) fetchUtilization() tea.Cmd {
+	service := r.resourceService
+	logger := r.log
+	return func() tea.Msg {
+		if service == nil {
+			return UtilizationReadyMsg{Error: fmt.Errorf("resource service is unavailable")}
+		}
+
+		client := service.GetClient()
+		if client == nil {
+			return UtilizationReadyMsg{Error: fmt.Errorf("Kubernetes client is unavailable")}
+		}
+
+		ctx := context.Background()
+		if !client.CheckMetricsAPIAvailable(ctx) {
+			return UtilizationReadyMsg{
+				Error:       fmt.Errorf("metrics.k8s.io API is unavailable"),
+				Unavailable: true,
+			}
+		}
+
+		metricsClient, err := k8s.NewMetricsClient(client, logger)
+		if err != nil {
+			return UtilizationReadyMsg{Error: err}
+		}
+
+		nodeMetrics, podMetrics, err := metricsClient.GetMetricsFromServer(ctx)
+		if err != nil {
+			return UtilizationReadyMsg{Error: err}
+		}
+
+		return UtilizationReadyMsg{
+			NodeMetrics: nodeMetrics,
+			PodMetrics:  podMetrics,
+		}
+	}
 }
 
 func (r *RootModel) activateScreen(id ScreenID) tea.Cmd {
