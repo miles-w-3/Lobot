@@ -1,5 +1,9 @@
 replicaCount: 1
 
+# Extra lightweight release resources make the Helm graph wide enough to test
+# horizontal canvas panning without creating additional workloads.
+extraConfigMaps: 24
+
 image:
   repository: nginx
   tag: 1.27-alpine

@@ -15,6 +15,7 @@ type CommandGroup[T comparable] struct {
 func (g *CommandGroup[T]) Add(key string, cmd T) *CommandBinding[T] {
 	display := key
 	switch key {
+	// special visualizers for arrow keys
 	case "up":
 		display = "↑"
 	case "down":

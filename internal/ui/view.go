@@ -24,6 +24,11 @@ func (m Model) View() tea.View {
 		content = m.renderVisualizeView()
 	} else if m.viewMode == ViewModeUtilization {
 		content = m.renderUtilizationView()
+	} else if m.viewMode == ViewModeWorkloadLogs {
+		content = lipgloss.JoinVertical(
+			lipgloss.Left,
+			m.workloadLogsModel.View(),
+		)
 	} else {
 		content = m.renderNormalView()
 	}

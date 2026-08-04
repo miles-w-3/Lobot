@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"log/slog"
+
 	tea "charm.land/bubbletea/v2"
 	"github.com/miles-w-3/lobot/internal/keys"
 )
@@ -60,6 +62,7 @@ func (m Model) handleGlobalCommand(cmd keys.GlobalCmd) (Model, tea.Cmd) {
 }
 
 func (m Model) handleNormalCommand(cmd keys.NormalCmd) (Model, tea.Cmd) {
+	slog.Debug("Handling cmd", "cmd", cmd)
 	switch cmd {
 	case keys.NormalCmdMoveUp:
 		m.MoveUp()
@@ -108,6 +111,8 @@ func (m Model) handleNormalCommand(cmd keys.NormalCmd) (Model, tea.Cmd) {
 		return m, m.OpenContextSelector()
 	case keys.NormalCmdUtilizationDashboard:
 		return m, m.checkMetricsAPIAndOpen()
+	case keys.NormalCmdWorkloadLogs:
+		return m, m.checkWorkloadLogsAndOpen()
 	case keys.NormalCmdQuit:
 		return m, tea.Quit
 	}

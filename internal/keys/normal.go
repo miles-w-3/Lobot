@@ -26,6 +26,7 @@ const (
 	NormalCmdResourceTypeSelector
 	NormalCmdContextSelector
 	NormalCmdUtilizationDashboard
+	NormalCmdWorkloadLogs
 	NormalCmdQuit
 )
 
@@ -49,6 +50,7 @@ func NewNormalRegistry() *command.Registry[NormalCmd] {
 	actions.Add("E", NormalCmdEdit).WithDescription("edit")
 	actions.Add("V", NormalCmdVisualize).WithDescription("visualize")
 	actions.Add("R", NormalCmdRefresh).WithDescription("refresh")
+	actions.Add("L", NormalCmdWorkloadLogs).WithDescription("view logs (pod only)")
 	actions.Add("tab", NormalCmdToggleFavorites)
 
 	filters := r.NewCommandGroup("Filters")

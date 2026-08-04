@@ -39,6 +39,7 @@ const (
 	ViewModeVisualize
 	ViewModeUtilization
 	ViewModePalette
+	ViewModeWorkloadLogs
 )
 
 // Model represents the UI state
@@ -83,6 +84,7 @@ type Model struct {
 	visualizer *VisualizerModel
 
 	utilizationDashboard *UtilizationDashboardModel
+	workloadLogsModel    *WorkloadLogsModel
 	paletteModel         PaletteModel
 	paletteVisible       bool
 
@@ -95,19 +97,23 @@ type Model struct {
 	favoriteTypesViewport viewport.Model
 
 	// Command registries
-	globalRegistry      *command.Registry[keys.GlobalCmd]
-	splashRegistry      *command.Registry[keys.SplashCmd]
-	normalRegistry      *command.Registry[keys.NormalCmd]
-	filterRegistry      *command.Registry[keys.FilterCmd]
-	manifestRegistry    *command.Registry[keys.ManifestCmd]
-	treeRegistry        *command.Registry[keys.TreeCmd]
-	graphRegistry       *command.Registry[keys.GraphCmd]
-	utilizationRegistry *command.Registry[keys.UtilizationCmd]
+	// TODO: Broadly I dont' think all registries should need to be stored here for delegation
+	// reassess and see other comment in this file
+	globalRegistry       *command.Registry[keys.GlobalCmd]
+	splashRegistry       *command.Registry[keys.SplashCmd]
+	normalRegistry       *command.Registry[keys.NormalCmd]
+	filterRegistry       *command.Registry[keys.FilterCmd]
+	manifestRegistry     *command.Registry[keys.ManifestCmd]
+	treeRegistry         *command.Registry[keys.TreeCmd]
+	graphRegistry        *command.Registry[keys.GraphCmd]
+	utilizationRegistry  *command.Registry[keys.UtilizationCmd]
+	workloadLogsRegistry *command.Registry[keys.WorkloadLogsCmd]
 
 	// Error tracking
 	errorTracker *ErrorTracker
 }
 
+// TODO: please, refactor
 // CurrentRegistry returns the command registry for the current view mode
 func (m Model) CurrentRegistry() command.RegistryInterface {
 	if m.selector != nil && m.selector.IsVisible() {
@@ -147,6 +153,10 @@ type EditorFinishedMsg struct {
 
 // BuildGraphMsg is sent to trigger graph building
 type BuildGraphMsg struct {
+	Resource k8s.TrackedObject
+}
+
+type BuildWorkloadLogsMsg struct {
 	Resource k8s.TrackedObject
 }
 
@@ -214,17 +224,20 @@ func NewModel(resourceService *k8s.ResourceService, logger *slog.Logger, errorTr
 		ready:                 false,
 		isDark:                true,
 		showingFavoriteTypes:  false,
-		globalRegistry:        globalRegistry,
-		splashRegistry:        splashRegistry,
-		normalRegistry:        normalRegistry,
-		filterRegistry:        filterRegistry,
-		manifestRegistry:      manifestRegistry,
-		treeRegistry:          treeRegistry,
-		graphRegistry:         graphRegistry,
-		utilizationRegistry:   utilizationRegistry,
-		modal:                 NewModal(globalRegistry),
-		errorTracker:          errorTracker,
-		paletteModel:          NewPaletteModel(0, 0, true), // Width/height updated on WindowSizeMsg
+		// TODO: Future: Map or registryManager?
+		globalRegistry:   globalRegistry,
+		splashRegistry:   splashRegistry,
+		normalRegistry:   normalRegistry,
+		filterRegistry:   filterRegistry,
+		manifestRegistry: manifestRegistry,
+		treeRegistry:     treeRegistry,
+		graphRegistry:    graphRegistry,
+
+		utilizationRegistry:  utilizationRegistry,
+		workloadLogsRegistry: keys.NewWorkloadLogsRegistry(),
+		modal:                NewModal(globalRegistry),
+		errorTracker:         errorTracker,
+		paletteModel:         NewPaletteModel(0, 0, true), // Width/height updated on WindowSizeMsg
 	}
 }
 
@@ -248,6 +261,7 @@ func (m *Model) applyTheme(isDark bool) {
 		m.treeRegistry,
 		m.graphRegistry,
 		m.utilizationRegistry,
+		m.workloadLogsRegistry,
 	}
 	for _, registry := range registries {
 		registry.SetHelpConfig(cfg)
@@ -460,6 +474,19 @@ func (m *Model) checkMetricsAPIAndOpen() tea.Cmd {
 		available := client.CheckMetricsAPIAvailable(ctx)
 		return MetricsCheckMsg{Available: available}
 	}
+}
+
+// TODO: There's a better place for this
+func (m *Model) checkWorkloadLogsAndOpen() tea.Cmd {
+	resource := m.GetSelectedResource()
+	m.logger.Debug("Got logs request for resource", "kind", resource.GetKind())
+	// TODO: More idiomatic way to confirm it's pod?
+	if resource != nil && resource.GetKind() == "Pod" {
+		return func() tea.Msg {
+			return BuildWorkloadLogsMsg{Resource: resource}
+		}
+	}
+	return nil
 }
 
 // fetchMetricsData fetches metrics data from the cluster

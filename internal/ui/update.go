@@ -23,8 +23,13 @@ type MetricsDataMsg struct {
 	Error       error
 }
 
+// TODO: Messages are being defined all over the place!
+
+// TODO: Segmentation of this by event type!
 // Update handles messages and updates the model
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	logger := slog.Default()
+
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 
@@ -46,6 +51,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Cursor blink messages are private implementation details in
 			// Bubbles. Forward unknown messages and consume them only when the
 			// palette produces a follow-up command.
+			// TODO: See, registries are delegated here on input. So I think they're just
+			// needed for help menu on the main screen
 			m.paletteModel, cmd = m.paletteModel.Update(input)
 			if cmd != nil {
 				return m, cmd
@@ -68,6 +75,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// TODO: Confirm this is still most idiomatic
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
@@ -141,7 +149,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case SelectorFinishedMsg:
-		logger := slog.Default()
 		logger.Debug("SelectorFinishedMsg received",
 			"cancelled", msg.Cancelled,
 			"selectorType", msg.SelectorType,
@@ -168,6 +175,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			visualizer := NewVisualizerModel(resourceGraph, m.width, m.height, m.treeRegistry, m.graphRegistry)
 			m.visualizer = &visualizer
 			m.viewMode = ViewModeVisualize
+		}
+		return m, nil
+
+	case BuildWorkloadLogsMsg:
+		// TODO: Pass client!
+		if msg.Resource != nil {
+			logger.Debug("Recieved the build message")
+			workloadLogs := NewWorkloadLogsModel(
+				m.width,
+				m.height,
+				m.resourceService)
+			workloadLogs.PopulateLogs(msg.Resource.GetName(), msg.Resource.GetNamespace())
+			m.workloadLogsModel = &workloadLogs
+			m.viewMode = ViewModeWorkloadLogs
 		}
 		return m, nil
 
@@ -305,7 +326,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		// Global keys - highest priority, always check global registry first
-		slog.Debug("Received key msg", "key", msg.String())
 		if cmd, err := m.globalRegistry.Dispatch(msg); err == nil {
 			slog.Debug("Dispatch succeeded", "cmd", cmd)
 			return m.handleGlobalCommand(cmd)
@@ -328,6 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Mode-specific dispatch only if no overlays are visible
+		// TODO: NVM, we are directly mapping keys here. there must be a cleaner way?
 		switch m.viewMode {
 		case ViewModeSplash:
 			if m.splash.IsError() {
@@ -394,6 +415,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleMouseEvent(msg)
 	}
 
+	// TODO: I'm SURE we can do better
 	// Handle filter input updates when in filter mode
 	if m.viewMode == ViewModeFilter {
 		m.filterInput, cmd = m.filterInput.Update(msg)

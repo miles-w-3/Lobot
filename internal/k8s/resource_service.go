@@ -3,10 +3,12 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"sync"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -407,4 +409,27 @@ func (svc *ResourceService) startInformers(informer *InformerManager, resourceTy
 		}(resourceType)
 	}
 	wg.Wait()
+}
+
+func (svc *ResourceService) GetPodLogs(podName, namespace string) []byte {
+	pods := svc.client.Clientset.CoreV1().Pods(namespace)
+	req := pods.GetLogs(podName, &v1.PodLogOptions{})
+	body, err := req.DoRaw(context.Background())
+	if err != nil { // TODO: Error handling
+		return []byte{}
+	}
+	return body
+}
+
+func (svc *ResourceService) StreamPodLogs(podName string, namespace string, ctx context.Context) *io.ReadCloser {
+	pods := svc.client.Clientset.CoreV1().Pods(namespace)
+	req := pods.GetLogs(podName, &v1.PodLogOptions{
+		Timestamps: true,
+		Follow:     true,
+	})
+	reader, err := req.Stream(ctx)
+	if err == nil {
+		return nil
+	}
+	return &reader
 }
