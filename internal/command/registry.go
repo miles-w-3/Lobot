@@ -18,6 +18,85 @@ type PaletteEntry struct {
 	Searchable  []string // Additional search terms
 }
 
+// CommandGroupPresentation is the immutable command metadata needed to render
+// short and full help. It contains no dispatch state or styling.
+type CommandGroupPresentation struct {
+	Title       string
+	Description string
+	Commands    []PaletteEntry
+}
+
+// Presentation is a snapshot of the commands a screen can dispatch. The root
+// owns rendering this metadata as help; screens only expose the snapshot.
+type Presentation struct {
+	Groups         []CommandGroupPresentation
+	PaletteEntries []PaletteEntry
+}
+
+func (p Presentation) Empty() bool {
+	return len(p.Groups) == 0 && len(p.PaletteEntries) == 0
+}
+
+func (p Presentation) ShortView(config HelpConfig) string {
+	var items []string
+	for _, group := range p.Groups {
+		if len(group.Commands) == 0 {
+			continue
+		}
+		if group.Description != "" {
+			keys := presentationGroupKeys(group)
+			items = append(items,
+				config.Styles.ShortKey.Render(keys)+" "+
+					config.Styles.ShortDesc.Render(group.Description),
+			)
+			continue
+		}
+		for _, command := range group.Commands {
+			items = append(items,
+				config.Styles.ShortKey.Render(command.Display)+" "+
+					config.Styles.ShortDesc.Render(command.Description),
+			)
+		}
+	}
+	return strings.Join(items, config.Styles.ShortSeparator.Render(" • "))
+}
+
+func (p Presentation) FullView(config HelpConfig) string {
+	var lines []string
+	for _, group := range p.Groups {
+		if len(group.Commands) == 0 {
+			continue
+		}
+
+		groupHeader := config.Styles.FullGroup.Render(group.Title + ":")
+		lines = append(lines, groupHeader)
+		if group.Description != "" {
+			keys := presentationGroupKeys(group)
+			line := config.Styles.FullKey.Render(keys) + "  " +
+				config.Styles.FullDesc.Render(group.Description)
+			lines = append(lines, "  "+line)
+			continue
+		}
+
+		for _, command := range group.Commands {
+			allKeys := append([]string{command.Key}, command.AltKeys...)
+			line := "  " +
+				config.Styles.FullKey.Render(strings.Join(allKeys, ", ")) + "  " +
+				config.Styles.FullDesc.Render(command.Description)
+			lines = append(lines, line)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func presentationGroupKeys(group CommandGroupPresentation) string {
+	keys := make([]string, 0, len(group.Commands))
+	for _, command := range group.Commands {
+		keys = append(keys, command.Display)
+	}
+	return strings.Join(keys, "|")
+}
+
 type HelpStyles struct {
 	ShortKey       lipgloss.Style
 	ShortDesc      lipgloss.Style
@@ -80,26 +159,14 @@ func (c *HelpConfig) WithStyles(styles HelpStyles) *HelpConfig {
 }
 
 type Registry[T comparable] struct {
-	groups     []*CommandGroup[T]
-	byKey      map[string]T
-	helpConfig HelpConfig
-	shortHelp  string
-	fullHelp   string
-}
-
-// RegistryInterface defines the common interface for all command registries
-type RegistryInterface interface {
-	ShortView() string
-	FullView() string
-	PaletteEntries() []PaletteEntry
-	SetHelpConfig(HelpConfig)
+	groups []*CommandGroup[T]
+	byKey  map[string]T
 }
 
 func NewRegistry[T comparable]() *Registry[T] {
 	return &Registry[T]{
-		groups:     make([]*CommandGroup[T], 0),
-		byKey:      make(map[string]T),
-		helpConfig: NewHelpConfig(),
+		groups: make([]*CommandGroup[T], 0),
+		byKey:  make(map[string]T),
 	}
 }
 
@@ -162,23 +229,6 @@ func (r *Registry[T]) DispatchString(keyStr string) (T, error) {
 	return zero, fmt.Errorf("no binding found for key")
 }
 
-func (r *Registry[T]) WithConfig(cfg HelpConfig) *Registry[T] {
-	r.SetHelpConfig(cfg)
-	return r
-}
-
-// SetHelpConfig updates help styling and invalidates cached renderings.
-func (r *Registry[T]) SetHelpConfig(cfg HelpConfig) {
-	r.helpConfig = cfg
-	r.shortHelp = ""
-	r.fullHelp = ""
-}
-
-// ShortSeparator renders the separator configured for short help.
-func (r *Registry[T]) ShortSeparator(text string) string {
-	return r.helpConfig.Styles.ShortSeparator.Render(text)
-}
-
 // KeysForCommand returns the primary key followed by all alternates.
 func (r *Registry[T]) KeysForCommand(cmd T) []string {
 	entry, ok := r.EntryForCommand(cmd)
@@ -207,84 +257,50 @@ func (r *Registry[T]) EntryForCommand(cmd T) (PaletteEntry, bool) {
 	return PaletteEntry{}, false
 }
 
-func (r *Registry[T]) ShortView() string {
-	if r.shortHelp != "" {
-		return r.shortHelp
-	}
-
-	var items []string
-
-	for _, group := range r.groups {
-		if len(group.Commands) == 0 {
-			continue
-		}
-		if group.Description != "" {
-			keys := collectGroupKeys(group)
-			items = append(items, r.helpConfig.Styles.ShortKey.Render(keys)+" "+r.helpConfig.Styles.ShortDesc.Render(group.Description))
-		} else {
-			for _, b := range group.Commands {
-				items = append(items, r.helpConfig.Styles.ShortKey.Render(b.Display)+" "+r.helpConfig.Styles.ShortDesc.Render(b.Description))
-			}
-		}
-	}
-
-	r.shortHelp = strings.Join(items, r.helpConfig.Styles.ShortSeparator.Render(" • "))
-	return r.shortHelp
-}
-
-func (r *Registry[T]) FullView() string {
-	if r.fullHelp != "" {
-		return r.fullHelp
-	}
-
-	var lines []string
-
+// Presentation returns a detached snapshot of this registry's command
+// metadata. The snapshot intentionally excludes dispatch state and styles.
+func (r *Registry[T]) Presentation() Presentation {
+	presentation := Presentation{}
 	for _, group := range r.groups {
 		if len(group.Commands) == 0 {
 			continue
 		}
 
-		if group.Description != "" {
-			keys := collectGroupKeys(group)
-			line := r.helpConfig.Styles.FullKey.Render(keys) + "  " +
-				r.helpConfig.Styles.FullDesc.Render(group.Description)
-			groupHeader := r.helpConfig.Styles.FullGroup.Render(group.Title + ":")
-			lines = append(lines, groupHeader)
-			lines = append(lines, "  "+line)
-		} else {
-			groupHeader := r.helpConfig.Styles.FullGroup.Render(group.Title + ":")
-			lines = append(lines, groupHeader)
-			for _, b := range group.Commands {
-				allKeys := append([]string{b.Key}, b.AltKeys...)
-				keyStr := strings.Join(allKeys, ", ")
-				line := "  " +
-					r.helpConfig.Styles.FullKey.Render(keyStr) + "  " +
-					r.helpConfig.Styles.FullDesc.Render(b.Description)
-				lines = append(lines, line)
-			}
+		groupPresentation := CommandGroupPresentation{
+			Title:       group.Title,
+			Description: group.Description,
+			Commands:    make([]PaletteEntry, 0, len(group.Commands)),
 		}
+		for _, binding := range group.Commands {
+			groupPresentation.Commands = append(
+				groupPresentation.Commands,
+				paletteEntry(binding, group.Title),
+			)
+		}
+		presentation.Groups = append(presentation.Groups, groupPresentation)
 	}
-
-	r.fullHelp = strings.Join(lines, "\n")
-	return r.fullHelp
+	presentation.PaletteEntries = r.paletteEntries()
+	return presentation
 }
 
-func collectGroupKeys[T comparable](group *CommandGroup[T]) string {
-	var keys []string
-	for _, b := range group.Commands {
-		keys = append(keys, b.Display)
+func paletteEntry[T comparable](binding *CommandBinding[T], group string) PaletteEntry {
+	return PaletteEntry{
+		Key:         binding.Key,
+		AltKeys:     append([]string(nil), binding.AltKeys...),
+		Display:     binding.Display,
+		Description: binding.Description,
+		Group:       group,
+		Searchable:  append([]string(nil), binding.Searchable...),
 	}
-	return strings.Join(keys, "|")
 }
 
-func (r *Registry[T]) PaletteEntries() []PaletteEntry {
+func (r *Registry[T]) paletteEntries() []PaletteEntry {
 	var entries []PaletteEntry
 	seen := make(map[string]bool)
 
 	for _, group := range r.groups {
-		// Skip unified command groups (groups with a unified description)
-		// These represent multiple key bindings for a single action (e.g., "navigate")
-		// and should not appear as individual palette entries
+		// Unified groups describe a single action across several keys and are
+		// intentionally represented in help rather than as palette entries.
 		if group.Description != "" {
 			continue
 		}
@@ -294,15 +310,7 @@ func (r *Registry[T]) PaletteEntries() []PaletteEntry {
 				continue
 			}
 			seen[binding.Key] = true
-
-			entries = append(entries, PaletteEntry{
-				Key:         binding.Key,
-				AltKeys:     binding.AltKeys,
-				Display:     binding.Display,
-				Description: binding.Description,
-				Group:       group.Title,
-				Searchable:  binding.Searchable,
-			})
+			entries = append(entries, paletteEntry(binding, group.Title))
 		}
 	}
 

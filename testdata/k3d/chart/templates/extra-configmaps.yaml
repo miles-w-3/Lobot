@@ -1,0 +1,16 @@
+{{- range $index := until (int .Values.extraConfigMaps) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-extra-%02d" $.Release.Name $index }}
+  labels:
+    app.kubernetes.io/name: {{ $.Chart.Name }}
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+    app.kubernetes.io/managed-by: {{ $.Release.Service }}
+    lobot.example.com/graph-fixture: wide
+  annotations:
+    lobot.example.com/graph-index: {{ $index | quote }}
+data:
+  purpose: horizontal-canvas-fixture
+---
+{{- end }}

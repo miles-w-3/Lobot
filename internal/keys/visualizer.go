@@ -45,7 +45,7 @@ func NewVisualizerRegistry() *command.Registry[VisualizerCmd] {
 	actions.Add("V", VisualizerCmdToggleMode).WithAlternates("toggle view")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit")
-	exit.Add("esc", VisualizerCmdBack).WithAlternates("q")
+	exit.Add("esc", VisualizerCmdBack)
 
 	r.Build()
 

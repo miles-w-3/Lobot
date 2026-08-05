@@ -38,7 +38,7 @@ func NewUtilizationRegistry() *command.Registry[UtilizationCmd] {
 	view.Add("d", UtilizationCmdShowDetails).WithAlternates("enter").WithDescription("node details")
 
 	exit := r.NewUnifiedCommandGroup("Exit", "exit dashboard")
-	exit.Add("esc", UtilizationCmdBack).WithAlternates("q")
+	exit.Add("esc", UtilizationCmdBack)
 
 	r.Build()
 

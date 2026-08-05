@@ -106,19 +106,21 @@ func TestRegistryViewsAndPaletteComeFromBindings(t *testing.T) {
 		t.Fatalf("Build() error = %v", err)
 	}
 
-	short := r.ShortView()
+	presentation := r.Presentation()
+	config := NewHelpConfig()
+	short := presentation.ShortView(config)
 	if !strings.Contains(short, "↵") || !strings.Contains(short, "open item") {
 		t.Fatalf("ShortView() = %q, want binding display and description", short)
 	}
 
-	full := ansi.Strip(r.FullView())
+	full := ansi.Strip(presentation.FullView(config))
 	for _, want := range []string{"Actions:", "enter, o", "open item"} {
 		if !strings.Contains(full, want) {
 			t.Fatalf("FullView() = %q, want %q", full, want)
 		}
 	}
 
-	entries := r.PaletteEntries()
+	entries := presentation.PaletteEntries
 	if len(entries) != 1 {
 		t.Fatalf("len(PaletteEntries()) = %d, want 1", len(entries))
 	}
