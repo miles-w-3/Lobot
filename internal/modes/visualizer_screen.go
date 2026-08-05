@@ -136,7 +136,7 @@ func (s *VisualizerScreen) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 func (s *VisualizerScreen) dispatchTreeCommand(cmd keys.TreeCmd) tea.Cmd {
 	switch cmd {
 	case keys.TreeCmdBack:
-		return navigateTo(ScreenHome)
+		return navigateBack()
 	case keys.TreeCmdSwitchToGraph:
 		s.ensureGraphView()
 		s.mode = visualizationGraph
@@ -152,7 +152,7 @@ func (s *VisualizerScreen) dispatchTreeCommand(cmd keys.TreeCmd) tea.Cmd {
 func (s *VisualizerScreen) dispatchGraphCommand(cmd keys.GraphCmd) tea.Cmd {
 	switch cmd {
 	case keys.GraphCmdBack:
-		return navigateTo(ScreenHome)
+		return navigateBack()
 	case keys.GraphCmdSwitchToTree:
 		s.mode = visualizationTree
 		return nil

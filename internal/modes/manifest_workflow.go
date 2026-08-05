@@ -60,29 +60,12 @@ func (r *RootModel) startManifestEdit(msg ManifestEditRequestedMsg) tea.Cmd {
 			}
 		}
 
-		processErr := service.ProcessEditedFile(context.Background(), resourceCopy, editResult)
+		updatedResource, processErr := service.ProcessEditedFile(context.Background(), resourceCopy, editResult)
 		if processErr != nil {
 			return ManifestEditFinishedMsg{Resource: resourceCopy, Error: processErr}
 		}
 
-		editedBytes, readErr := os.ReadFile(editResult.TmpFilePath)
-		if readErr != nil {
-			return ManifestEditFinishedMsg{
-				Resource: resourceCopy,
-				Error:    fmt.Errorf("failed to read edited manifest: %w", readErr),
-			}
-		}
-		var editedObject map[string]interface{}
-		if unmarshalErr := yaml.Unmarshal(editedBytes, &editedObject); unmarshalErr != nil {
-			return ManifestEditFinishedMsg{
-				Resource: resourceCopy,
-				Error:    fmt.Errorf("failed to parse edited YAML: %w", unmarshalErr),
-			}
-		}
-		return ManifestEditFinishedMsg{
-			Resource: resourceCopy,
-			Content:  formatManifestObject(editedObject),
-		}
+		return ManifestEditFinishedMsg{Resource: updatedResource}
 	})
 }
 

@@ -179,7 +179,7 @@ func (svc *ResourceService) PrepareEditFile(resource TrackedObject) (*EditResult
 }
 
 // ProcessEditedFile processes an edited resource file
-func (svc *ResourceService) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) error {
+func (svc *ResourceService) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) (TrackedObject, error) {
 	return svc.client.ProcessEditedFile(ctx, resource, editResult)
 }
 

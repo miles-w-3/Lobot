@@ -12,17 +12,6 @@ import (
 	"github.com/miles-w-3/lobot/internal/util"
 )
 
-// SelectorKind identifies the domain value a selector returns. The selector
-// itself only knows about labels and values; Home owns the domain-specific
-// consequences of a selection.
-type SelectorKind uint8
-
-const (
-	SelectorKindNamespace SelectorKind = iota
-	SelectorKindContext
-	SelectorKindResourceType
-)
-
 // SelectorOption is the presentation/value pair shown by SelectorModel.
 type SelectorOption struct {
 	Label string
@@ -33,7 +22,6 @@ type SelectorOption struct {
 // navigation is local UI state and never becomes a root-level Bubble Tea
 // message.
 type SelectorResult struct {
-	Kind      SelectorKind
 	Value     string
 	Accepted  bool
 	Cancelled bool
@@ -50,7 +38,6 @@ const (
 // tea.Model or Screen: the owning screen controls its lifecycle and consumes
 // results directly.
 type SelectorModel struct {
-	kind     SelectorKind
 	title    string
 	options  []SelectorOption
 	filtered []SelectorOption
@@ -63,14 +50,13 @@ type SelectorModel struct {
 	registry *command.Registry[keys.SelectorCmd]
 }
 
-func NewSelectorModel(kind SelectorKind, title string, options []SelectorOption, current string) *SelectorModel {
+func NewSelectorModel(title string, options []SelectorOption, current string) *SelectorModel {
 	input := textinput.New()
 	input.Prompt = "/ "
 	input.Placeholder = "filter choices"
 	input.Focus()
 
 	model := &SelectorModel{
-		kind:     kind,
 		title:    title,
 		options:  append([]SelectorOption(nil), options...),
 		current:  current,
@@ -132,13 +118,12 @@ func (s *SelectorModel) dispatch(cmd keys.SelectorCmd) (*SelectorResult, tea.Cmd
 	case keys.SelectorCmdAccept:
 		if s.selected >= 0 && s.selected < len(s.filtered) {
 			return &SelectorResult{
-				Kind:     s.kind,
 				Value:    s.filtered[s.selected].Value,
 				Accepted: true,
 			}, nil
 		}
 	case keys.SelectorCmdCancel:
-		return &SelectorResult{Kind: s.kind, Cancelled: true}, nil
+		return &SelectorResult{Cancelled: true}, nil
 	}
 	return nil, nil
 }

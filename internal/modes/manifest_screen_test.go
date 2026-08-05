@@ -46,9 +46,14 @@ func TestManifestScreenLoadsAndRendersResourceSnapshot(t *testing.T) {
 		t.Fatalf("manifest view = %q, missing YAML content", view)
 	}
 
-	screen.Update(ManifestEditFinishedMsg{Content: "updated: true\n"})
-	if view := ansi.Strip(screen.View()); !strings.Contains(view, "updated") {
-		t.Fatalf("updated manifest view = %q, missing edited content", view)
+	updated := testManifestResource()
+	updated.GetRaw().Object["spec"] = map[string]interface{}{"replicas": int64(2)}
+	screen.Update(ManifestEditFinishedMsg{Resource: updated})
+	if screen.resource != updated {
+		t.Fatal("manifest screen retained the stale pre-edit resource")
+	}
+	if view := ansi.Strip(screen.View()); !strings.Contains(view, "replicas") || !strings.Contains(view, "2") {
+		t.Fatalf("updated manifest view = %q, missing authoritative edited content", view)
 	}
 }
 
@@ -64,19 +69,23 @@ func TestManifestScreenRaisesWorkflowRequestsAndNavigates(t *testing.T) {
 		t.Fatalf("edit message = %#v, want resource request", editCmd())
 	}
 
+	updated := testManifestResource()
+	updated.GetRaw().SetResourceVersion("2")
+	screen.Update(ManifestEditFinishedMsg{Resource: updated})
+
 	copyCmd := screen.Update(tea.KeyPressMsg{Text: "ctrl+y"})
 	if copyCmd == nil {
 		t.Fatal("copy returned no request command")
 	}
-	if msg, ok := copyCmd().(ManifestCopyRequestedMsg); !ok || msg.Resource == nil {
-		t.Fatalf("copy message = %#v, want resource request", copyCmd())
+	if msg, ok := copyCmd().(ManifestCopyRequestedMsg); !ok || msg.Resource != updated {
+		t.Fatalf("copy message = %#v, want authoritative updated resource", copyCmd())
 	}
 
 	backCmd := screen.Update(tea.KeyPressMsg{Text: "esc"})
 	if backCmd == nil {
 		t.Fatal("back returned no navigation command")
 	}
-	if msg, ok := backCmd().(NavigateMsg); !ok || msg.Target != ScreenHome {
-		t.Fatalf("back message = %#v, want Home navigation", backCmd())
+	if _, ok := backCmd().(BackMsg); !ok {
+		t.Fatalf("back message = %#v, want BackMsg", backCmd())
 	}
 }

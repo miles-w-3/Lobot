@@ -86,6 +86,23 @@ func TestTransientScreenFactoriesDoNotCache(t *testing.T) {
 	}
 }
 
+func TestBackMessageReturnsToHome(t *testing.T) {
+	root := NewRootModel(nil, slog.Default())
+	root.current = NewManifestScreen()
+	root.currentID = ScreenManifest
+
+	_, cmd := root.Update(BackMsg{})
+	if root.currentID != ScreenHome {
+		t.Fatalf("current screen = %v, want home", root.currentID)
+	}
+	if _, ok := root.current.(*HomeScreen); !ok {
+		t.Fatalf("current screen = %T, want *HomeScreen", root.current)
+	}
+	if cmd == nil {
+		t.Fatal("back activation returned no Home activation command")
+	}
+}
+
 func TestVisualizerReadyUsesVisualizerFactory(t *testing.T) {
 	root := NewRootModel(nil, slog.Default())
 	root.current = NewHomeScreen(nil, nil)
@@ -100,6 +117,118 @@ func TestVisualizerReadyUsesVisualizerFactory(t *testing.T) {
 	}
 	if cmd != nil {
 		t.Fatalf("visualizer activation command = %v, want nil", cmd)
+	}
+}
+
+func TestLifecycleMessagesReachScreenThroughOverlays(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		setup func(*RootModel)
+	}{
+		{
+			name: "palette",
+			setup: func(root *RootModel) {
+				root.commandPaletteVisible = true
+			},
+		},
+		{
+			name: "modal",
+			setup: func(root *RootModel) {
+				root.modal.Show("test", "test")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			screen := &recordingScreen{}
+			root := NewRootModel(nil, slog.Default())
+			root.current = screen
+			root.currentID = ScreenHome
+			test.setup(root)
+
+			_, cmd := root.Update(ResourceUpdateMsg{})
+			if cmd != nil {
+				t.Fatalf("resource update command = %v, want nil", cmd)
+			}
+			if len(screen.updates) != 1 {
+				t.Fatalf("screen updates = %d, want 1", len(screen.updates))
+			}
+			if _, ok := screen.updates[0].(ResourceUpdateMsg); !ok {
+				t.Fatalf("screen message = %T, want ResourceUpdateMsg", screen.updates[0])
+			}
+		})
+	}
+}
+
+func TestTypingModesDeferPrintableGlobalBindings(t *testing.T) {
+	t.Run("home filter", func(t *testing.T) {
+		home := NewHomeScreen(nil, nil)
+		home.enterFilter()
+		root := NewRootModel(nil, slog.Default())
+		root.current = home
+		root.currentID = ScreenHome
+
+		root.Update(tea.KeyPressMsg{Text: "q"})
+		if got := home.filterInput.Value(); got != "q" {
+			t.Fatalf("filter value = %q, want q", got)
+		}
+	})
+
+	t.Run("home selector", func(t *testing.T) {
+		home := NewHomeScreen(nil, nil)
+		home.selector = NewSelectorModel(
+			"Select Namespace",
+			[]SelectorOption{{Label: "default", Value: "default"}},
+			"default",
+		)
+		root := NewRootModel(nil, slog.Default())
+		root.current = home
+		root.currentID = ScreenHome
+
+		root.Update(tea.KeyPressMsg{Text: "q"})
+		if got := home.selector.input.Value(); got != "q" {
+			t.Fatalf("selector value = %q, want q", got)
+		}
+	})
+
+	t.Run("command palette", func(t *testing.T) {
+		root := NewRootModel(nil, slog.Default())
+		root.commandPaletteVisible = true
+
+		root.Update(tea.KeyPressMsg{Text: "q"})
+		if got := root.commandPalette.input.Value(); got != "q" {
+			t.Fatalf("palette value = %q, want q", got)
+		}
+	})
+}
+
+func TestNormalScreenStillDispatchesGlobalQuit(t *testing.T) {
+	root := NewRootModel(nil, slog.Default())
+	root.current = NewHomeScreen(nil, nil)
+	root.currentID = ScreenHome
+
+	_, cmd := root.Update(tea.KeyPressMsg{Text: "q"})
+	if cmd == nil {
+		t.Fatal("global quit returned no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("quit command message = %T, want tea.QuitMsg", cmd())
+	}
+}
+
+func TestRootModalTemporarilyOwnsInputOverTypingScreen(t *testing.T) {
+	home := NewHomeScreen(nil, nil)
+	home.enterFilter()
+	root := NewRootModel(nil, slog.Default())
+	root.current = home
+	root.currentID = ScreenHome
+	root.modal.Show("Error", "test")
+
+	if root.isTyping() {
+		t.Fatal("underlying Home filter reported typing through root modal")
+	}
+	root.modal.Hide()
+	if !root.isTyping() {
+		t.Fatal("Home filter typing state was not restored after modal closed")
 	}
 }
 

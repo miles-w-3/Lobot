@@ -249,7 +249,7 @@ func (m *UtilizationScreen) handleCommand(cmd keys.UtilizationCmd) tea.Cmd {
 			m.showNodeDetails = false
 			return nil
 		}
-		return navigateTo(ScreenHome)
+		return navigateBack()
 	case keys.UtilizationCmdScrollUp:
 		if m.showNodeDetails {
 			m.selectPrevModalPod()

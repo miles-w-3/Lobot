@@ -16,6 +16,13 @@ import (
 	"github.com/miles-w-3/lobot/internal/util"
 )
 
+// typingScreen is implemented only by screens with focused text-entry modes.
+// RootModel queries it synchronously so printable global bindings cannot race
+// an asynchronously emitted focus-change message.
+type typingScreen interface {
+	IsTyping() bool
+}
+
 // RootModel is the Bubble Tea program model. It owns global routing, shared
 // overlays, terminal state, and the active screen; screen-specific behavior
 // lives in the screen itself.
@@ -37,7 +44,6 @@ type RootModel struct {
 
 	globalRegistry  *command.Registry[keys.GlobalCmd]
 	resourceService *k8s.ResourceService
-	graphBuilder    *graph.Builder
 }
 
 func NewRootModel(resourceService *k8s.ResourceService, log *slog.Logger) *RootModel {
@@ -52,7 +58,6 @@ func NewRootModel(resourceService *k8s.ResourceService, log *slog.Logger) *RootM
 		modal:           NewModalModel(),
 		globalRegistry:  keys.NewGlobalRegistry(),
 		resourceService: resourceService,
-		graphBuilder:    graph.NewBuilder(resourceService, log),
 		isDark:          true,
 	}
 
@@ -126,9 +131,13 @@ func (r *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, cmd
 	}
 
-	// Global commands have priority everywhere, including overlays. This keeps
-	// quit/help/palette behavior deterministic and prevents double dispatch.
-	if key, ok := msg.(tea.KeyPressMsg); ok {
+	// Text-entry modes own all keys so printable global bindings such as q and ?
+	// can be entered normally. Global dispatch resumes as soon as the active
+	// field closes.
+	// TODO: Improve global routing so ctrl+c can remain universally available
+	// while other globals defer to focused input, ideally without hardcoding a
+	// key or expanding this into a general interaction-layer abstraction.
+	if key, ok := msg.(tea.KeyPressMsg); ok && !r.isTyping() {
 		if globalCmd, err := r.globalRegistry.Dispatch(key); err == nil {
 			return r.handleGlobalCommand(globalCmd)
 		}
@@ -163,6 +172,23 @@ func (r *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, tea.Batch(activationCmd, r.updateCurrentScreen(msg))
 	case NamespaceOptionsReadyMsg, ContextOptionsReadyMsg, ResourceTypeOptionsReadyMsg:
 		return r, r.updateCurrentScreen(msg)
+	case ResourceUpdateMsg, SplashServiceReadyMsg, HomeActivatedMsg:
+		return r, r.updateCurrentScreen(msg)
+	case NavigateMsg:
+		return r, r.activateScreen(msg.Target)
+	case BackMsg:
+		// TODO: Replace the fixed destination with route history if screens gain
+		// non-Home parents. Screens should continue to emit only BackMsg.
+		return r, r.activateScreen(ScreenHome)
+	case ErrorMsg:
+		r.commandPaletteVisible = false
+		if r.currentID == ScreenSplash {
+			return r, r.updateCurrentScreen(msg)
+		}
+		if msg.Error != nil {
+			r.showModal("Error", msg.Error.Error())
+		}
+		return r, nil
 	}
 
 	if r.commandPaletteVisible {
@@ -183,27 +209,39 @@ func (r *RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return r, r.modal.Update(msg)
 	}
 
-	switch msg := msg.(type) {
-	case NavigateMsg:
-		return r, r.activateScreen(msg.Target)
-	case ErrorMsg:
-		if r.currentID != ScreenSplash && msg.Error != nil {
-			r.showModal("Error", msg.Error.Error())
-			return r, nil
-		}
-	}
-
 	return r, r.updateCurrentScreen(msg)
 }
 
+func (r *RootModel) isTyping() bool {
+	if r.commandPaletteVisible {
+		return true
+	}
+	// A root modal owns input while visible and currently has no text field.
+	// Ignore any typing state on the obscured screen until the modal closes.
+	if r.modal.IsVisible() {
+		return false
+	}
+	if screen, ok := r.current.(typingScreen); ok {
+		return screen.IsTyping()
+	}
+	return false
+}
+
 func (r *RootModel) buildVisualizer(resource k8s.TrackedObject) tea.Cmd {
-	if resource == nil || r.graphBuilder == nil {
+	if resource == nil {
 		return func() tea.Msg {
 			return ErrorMsg{Error: fmt.Errorf("cannot visualize an empty resource")}
 		}
 	}
+	if r.resourceService == nil {
+		return func() tea.Msg {
+			return ErrorMsg{Error: fmt.Errorf("cannot visualize without a resource service")}
+		}
+	}
 
-	builder := r.graphBuilder
+	// Builders own a mutable discovery cache. Keep one builder per operation so
+	// overlapping requests cannot race or reuse cache entries across contexts.
+	builder := graph.NewBuilder(r.resourceService, r.log)
 	return func() tea.Msg {
 		return VisualizerReadyMsg{Graph: builder.BuildGraph(resource)}
 	}

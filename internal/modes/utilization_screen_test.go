@@ -83,9 +83,8 @@ func TestUtilizationScreenPreservesRegistryBindings(t *testing.T) {
 		t.Fatal("second esc returned no navigation command")
 	}
 	msg := cmd()
-	navigate, ok := msg.(NavigateMsg)
-	if !ok || navigate.Target != ScreenHome {
-		t.Fatalf("second esc message = %#v, want Home navigation", msg)
+	if _, ok := msg.(BackMsg); !ok {
+		t.Fatalf("second esc message = %#v, want BackMsg", msg)
 	}
 }
 

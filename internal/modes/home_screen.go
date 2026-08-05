@@ -26,6 +26,14 @@ const (
 	favoriteTypesContentWidth = favoriteTypesBoxWidth - 4 // border + padding
 )
 
+type homeSelectorKind uint8
+
+const (
+	homeSelectorNamespace homeSelectorKind = iota
+	homeSelectorContext
+	homeSelectorResourceType
+)
+
 // HomeScreen is the resource-list screen shown after startup. It owns the
 // resource table, its filters, and the commands that operate on that list.
 type HomeScreen struct {
@@ -50,6 +58,7 @@ type HomeScreen struct {
 	nameFilter      *filters.ResourceNameFilter
 
 	selector              *SelectorModel
+	selectorKind          homeSelectorKind
 	selectorLoading       bool
 	selectorRequestID     uint64
 	selectorResourceTypes map[string]*k8s.TrackedType
@@ -150,6 +159,7 @@ func (s *HomeScreen) Update(msg tea.Msg) tea.Cmd {
 		return nil
 	case HomeActivatedMsg:
 		s.selector = nil
+		s.selectorKind = homeSelectorNamespace
 		s.selectorLoading = false
 		s.selectorResourceTypes = nil
 		s.updateResources()
@@ -466,7 +476,8 @@ func (s *HomeScreen) openNamespaceSelector(msg NamespaceOptionsReadyMsg) tea.Cmd
 	if current == "" {
 		current = "<all>"
 	}
-	s.selector = NewSelectorModel(SelectorKindNamespace, "Select Namespace", options, current)
+	s.selectorKind = homeSelectorNamespace
+	s.selector = NewSelectorModel("Select Namespace", options, current)
 	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
 	return nil
 }
@@ -483,7 +494,8 @@ func (s *HomeScreen) openContextSelector(msg ContextOptionsReadyMsg) tea.Cmd {
 		}
 		options = append(options, SelectorOption{Label: contextName, Value: contextName})
 	}
-	s.selector = NewSelectorModel(SelectorKindContext, "Select Cluster Context", options, msg.Current)
+	s.selectorKind = homeSelectorContext
+	s.selector = NewSelectorModel("Select Cluster Context", options, msg.Current)
 	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
 	return nil
 }
@@ -509,12 +521,14 @@ func (s *HomeScreen) openResourceTypeSelector(msg ResourceTypeOptionsReadyMsg) t
 			Value: resourceType.DisplayName,
 		})
 	}
-	s.selector = NewSelectorModel(SelectorKindResourceType, "Select Resource Type", options, s.currentResourceType().DisplayName)
+	s.selectorKind = homeSelectorResourceType
+	s.selector = NewSelectorModel("Select Resource Type", options, s.currentResourceType().DisplayName)
 	_, _ = s.selector.Update(tea.WindowSizeMsg{Width: s.width, Height: s.height})
 	return nil
 }
 
 func (s *HomeScreen) finishSelector(result SelectorResult) tea.Cmd {
+	kind := s.selectorKind
 	resourceTypes := s.selectorResourceTypes
 	s.selector = nil
 	s.selectorResourceTypes = nil
@@ -522,19 +536,19 @@ func (s *HomeScreen) finishSelector(result SelectorResult) tea.Cmd {
 		return nil
 	}
 
-	switch result.Kind {
-	case SelectorKindNamespace:
+	switch kind {
+	case homeSelectorNamespace:
 		if result.Value == "<all>" {
 			_ = s.namespaceFilter.SetPattern("")
 		} else {
 			_ = s.namespaceFilter.SetPattern(result.Value)
 		}
 		s.updateResources()
-	case SelectorKindContext:
+	case homeSelectorContext:
 		return func() tea.Msg {
 			return ContextSwitchRequestedMsg{ContextName: result.Value}
 		}
-	case SelectorKindResourceType:
+	case homeSelectorResourceType:
 		return s.selectResourceType(resourceTypes[result.Value])
 	}
 	return nil
@@ -573,6 +587,7 @@ func (s *HomeScreen) selectResourceType(resourceType *k8s.TrackedType) tea.Cmd {
 
 func (s *HomeScreen) resetForContext() {
 	s.selector = nil
+	s.selectorKind = homeSelectorNamespace
 	s.selectorLoading = false
 	s.selectorResourceTypes = nil
 	s.filtering = false
@@ -774,6 +789,13 @@ func (s *HomeScreen) layoutComponents() {
 		s.favoriteTypesViewport.SetWidth(favoriteTypesContentWidth)
 		s.favoriteTypesViewport.SetHeight(max(1, mainHeight-2))
 	}
+}
+
+// IsTyping reports whether Home's active submode owns text input. Selector
+// loading is not typing; global commands remain available until the field is
+// actually displayed.
+func (s *HomeScreen) IsTyping() bool {
+	return s.filtering || s.selector != nil
 }
 
 // CommandPresentation exposes the registry for the currently active Home

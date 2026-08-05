@@ -13,14 +13,23 @@ const (
 	ScreenManifest
 )
 
-// NavigateMsg requests a screen transition. The root owns construction and
-// lifecycle of the destination screen.
+// NavigateMsg requests a specific screen transition. It remains for lifecycle
+// transitions such as Splash completing; ordinary screen exits use BackMsg so
+// only RootModel knows their destination.
 type NavigateMsg struct {
 	Target ScreenID
 }
+
+// BackMsg asks RootModel to leave the active screen without exposing its
+// destination to that screen.
+type BackMsg struct{}
 
 func navigateTo(target ScreenID) tea.Cmd {
 	return func() tea.Msg {
 		return NavigateMsg{Target: target}
 	}
+}
+
+func navigateBack() tea.Cmd {
+	return func() tea.Msg { return BackMsg{} }
 }

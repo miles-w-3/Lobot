@@ -39,8 +39,8 @@ func (s *ManifestScreen) Update(msg tea.Msg) tea.Cmd {
 		s.setResource(msg.Resource)
 		return nil
 	case ManifestEditFinishedMsg:
-		if msg.Error == nil && msg.Content != "" {
-			s.setContent(msg.Content)
+		if msg.Error == nil && msg.Resource != nil {
+			s.setResource(msg.Resource)
 		}
 		return nil
 	case tea.WindowSizeMsg:
@@ -61,7 +61,7 @@ func (s *ManifestScreen) updateKey(msg tea.KeyPressMsg) tea.Cmd {
 
 	switch cmd {
 	case keys.ManifestCmdBack:
-		return navigateTo(ScreenHome)
+		return navigateBack()
 	case keys.ManifestCmdEdit:
 		if s.resource == nil {
 			return nil

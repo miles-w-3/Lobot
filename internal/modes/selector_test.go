@@ -8,7 +8,6 @@ import (
 
 func TestSelectorDispatchesNavigationAndAcceptsSelection(t *testing.T) {
 	selector := NewSelectorModel(
-		SelectorKindNamespace,
 		"Select Namespace",
 		[]SelectorOption{
 			{Label: "default", Value: "default"},
@@ -29,7 +28,6 @@ func TestSelectorDispatchesNavigationAndAcceptsSelection(t *testing.T) {
 
 func TestSelectorCancelIsLocalResult(t *testing.T) {
 	selector := NewSelectorModel(
-		SelectorKindContext,
 		"Select Context",
 		[]SelectorOption{{Label: "dev", Value: "dev"}},
 		"dev",
@@ -39,8 +37,8 @@ func TestSelectorCancelIsLocalResult(t *testing.T) {
 	if cmd != nil {
 		t.Fatalf("cancel command = %v, want nil", cmd)
 	}
-	if result == nil || !result.Cancelled || result.Kind != SelectorKindContext {
-		t.Fatalf("cancel result = %#v, want cancelled context result", result)
+	if result == nil || !result.Cancelled {
+		t.Fatalf("cancel result = %#v, want cancelled result", result)
 	}
 }
 

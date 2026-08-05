@@ -63,11 +63,13 @@ func (c *Client) PrepareEditFile(resource TrackedObject) (*EditResult, error) {
 	}, nil
 }
 
-// ProcessEditedFile reads, validates, and applies the edited resource
-// This should be called AFTER the editor exits
-func (c *Client) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) error {
+// ProcessEditedFile reads, validates, and applies the edited resource.
+// It returns the authoritative object returned by Kubernetes so callers do not
+// retain stale manifest or resource-version state after a successful edit.
+// This should be called AFTER the editor exits.
+func (c *Client) ProcessEditedFile(ctx context.Context, resource TrackedObject, editResult *EditResult) (TrackedObject, error) {
 	if editResult == nil {
-		return fmt.Errorf("invalid edit result")
+		return nil, fmt.Errorf("invalid edit result")
 	}
 
 	c.Logger.Info("Processing edited file", "path", editResult.TmpFilePath)
@@ -75,13 +77,13 @@ func (c *Client) ProcessEditedFile(ctx context.Context, resource TrackedObject, 
 	// Read edited content
 	editedBytes, err := os.ReadFile(editResult.TmpFilePath)
 	if err != nil {
-		return fmt.Errorf("failed to read edited file: %w", err)
+		return nil, fmt.Errorf("failed to read edited file: %w", err)
 	}
 
 	// Check if content actually changed
 	if bytes.Equal(editedBytes, editResult.OriginalContent) {
 		c.Logger.Info("No changes detected, edit cancelled or no modifications made")
-		return nil // Not an error - user cancelled or made no changes
+		return resource, nil // Not an error - user cancelled or made no changes
 	}
 
 	c.Logger.Info("Changes detected, validating edited content")
@@ -89,23 +91,25 @@ func (c *Client) ProcessEditedFile(ctx context.Context, resource TrackedObject, 
 	// Parse edited YAML
 	var editedObj map[string]interface{}
 	if err := yaml.Unmarshal(editedBytes, &editedObj); err != nil {
-		return fmt.Errorf("failed to parse edited YAML (syntax error): %w", err)
+		return nil, fmt.Errorf("failed to parse edited YAML (syntax error): %w", err)
 	}
 
 	// Validate the edited manifest
 	if err := c.ValidateEditedManifest(resource, editedObj); err != nil {
-		return err
+		return nil, err
 	}
 
 	c.Logger.Info("Validation passed, applying changes to cluster")
 
-	// Apply the changes
-	if err := c.UpdateResource(ctx, resource, editedObj); err != nil {
-		return err
+	// Apply the changes and preserve the server-returned object, including its
+	// new resource version and any defaulted fields.
+	updatedResource, err := c.UpdateResource(ctx, resource, editedObj)
+	if err != nil {
+		return nil, err
 	}
 
 	c.Logger.Info("Resource updated successfully")
-	return nil
+	return updatedResource, nil
 }
 
 // ValidateEditedManifest validates that the edited manifest is a valid Kubernetes resource
@@ -164,12 +168,13 @@ func (c *Client) ValidateEditedManifest(original TrackedObject, editedObj map[st
 	return nil
 }
 
-// UpdateResource updates a Kubernetes resource with new content
-func (c *Client) UpdateResource(ctx context.Context, originalResource TrackedObject, editedObj map[string]interface{}) error {
+// UpdateResource updates a Kubernetes resource with new content and returns
+// the authoritative object returned by the API server.
+func (c *Client) UpdateResource(ctx context.Context, originalResource TrackedObject, editedObj map[string]interface{}) (TrackedObject, error) {
 	// Create dynamic client
 	dynamicClient, err := dynamic.NewForConfig(c.Config)
 	if err != nil {
-		return fmt.Errorf("failed to create dynamic client: %w", err)
+		return nil, fmt.Errorf("failed to create dynamic client: %w", err)
 	}
 
 	// Convert edited object to unstructured
@@ -184,7 +189,7 @@ func (c *Client) UpdateResource(ctx context.Context, originalResource TrackedObj
 	case *ArgoCDApp:
 		gvr = res.GVR
 	default:
-		return fmt.Errorf("resource type %T cannot be edited", originalResource)
+		return nil, fmt.Errorf("resource type %T cannot be edited", originalResource)
 	}
 
 	// Get resource interface
@@ -202,31 +207,30 @@ func (c *Client) UpdateResource(ctx context.Context, originalResource TrackedObj
 		"namespace", namespace)
 
 	// Update the resource
-	_, err = resourceInterface.Update(ctx, unstructuredObj, metav1.UpdateOptions{})
+	updatedObject, err := resourceInterface.Update(ctx, unstructuredObj, metav1.UpdateOptions{})
 	if err != nil {
 		// Provide helpful error messages based on error type
 		if errors.IsConflict(err) {
-			return fmt.Errorf("conflict: resource was modified on the cluster after you opened the editor. "+
+			return nil, fmt.Errorf("conflict: resource was modified on the cluster after you opened the editor. "+
 				"The resource version has changed. Please try editing again to get the latest version: %w", err)
 		}
 
 		if errors.IsInvalid(err) {
-			return fmt.Errorf("validation failed: the edited manifest failed Kubernetes validation. "+
+			return nil, fmt.Errorf("validation failed: the edited manifest failed Kubernetes validation. "+
 				"Check that all required fields are present and valid: %w", err)
 		}
 
 		if errors.IsNotFound(err) {
-			return fmt.Errorf("not found: resource no longer exists on the cluster. "+
+			return nil, fmt.Errorf("not found: resource no longer exists on the cluster. "+
 				"It may have been deleted while you were editing: %w", err)
 		}
 
 		if errors.IsForbidden(err) {
-			return fmt.Errorf("forbidden: you don't have permission to update this resource: %w", err)
+			return nil, fmt.Errorf("forbidden: you don't have permission to update this resource: %w", err)
 		}
 
-		return fmt.Errorf("failed to update resource on cluster: %w", err)
+		return nil, fmt.Errorf("failed to update resource on cluster: %w", err)
 	}
 
-	return nil
+	return ConvertUnstructuredToTrackedObject(updatedObject, gvr), nil
 }
-

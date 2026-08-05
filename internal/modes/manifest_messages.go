@@ -21,8 +21,8 @@ type ManifestCopyRequestedMsg struct {
 }
 
 // ManifestEditFinishedMsg reports completion of the external editor workflow.
+// On success Resource is the authoritative object returned by Kubernetes.
 type ManifestEditFinishedMsg struct {
 	Resource k8s.TrackedObject
-	Content  string
 	Error    error
 }

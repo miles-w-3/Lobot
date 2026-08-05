@@ -68,11 +68,7 @@ func TestVisualizerScreenBackNavigatesHome(t *testing.T) {
 	}
 
 	msg := cmd()
-	navigate, ok := msg.(NavigateMsg)
-	if !ok {
-		t.Fatalf("back message = %T, want NavigateMsg", msg)
-	}
-	if navigate.Target != ScreenHome {
-		t.Fatalf("back target = %v, want %v", navigate.Target, ScreenHome)
+	if _, ok := msg.(BackMsg); !ok {
+		t.Fatalf("back message = %T, want BackMsg", msg)
 	}
 }
